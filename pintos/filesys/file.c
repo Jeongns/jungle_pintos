@@ -168,3 +168,9 @@ file_dup2(struct file* file) {
 	file->ref_cnt++;
 	return file;
 }
+
+int
+file_reference_count(struct file* file) {
+	ASSERT (file != NULL);
+	return file->ref_cnt;
+}

@@ -92,6 +92,19 @@ bool copy_fd_table(struct fd_table* dst, struct fd_table* src) {
             new_file_list[i] = src->file_list[i];
             continue;
         }
+
+        bool is_dup = false;
+        if (file_reference_count(src->file_list[i]) > 1) {
+            for (int j = 0; j < i; j++) {
+                if (src->file_list[i] == src->file_list[j]) {
+                    new_file_list[i] = file_dup2(new_file_list[j]);
+                    is_dup = true;
+                    break;
+                }
+            }
+        }
+        if (is_dup) continue;
+
         if ((new_file_list[i] = file_duplicate(src->file_list[i])) == NULL) return false;
     }
 
