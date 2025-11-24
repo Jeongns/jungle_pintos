@@ -19,7 +19,7 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-#include "userprog/fdtable.h"
+#include "userprog/fd_util.h"
 #include "userprog/gdt.h"
 #include "userprog/tss.h"
 #ifdef VM
@@ -39,7 +39,9 @@ static void initd(void* f_name);
 static void __do_fork(void*);
 
 /* General process initializer for initd and other process. */
-static void process_init(void) { fdt_list_init(thread_current()); }
+static void process_init(void) {
+    if (!fd_init(thread_current())) thread_exit();
+}
 
 /* Starts the first userland program, called "initd", loaded from FILE_NAME.
  * The new thread may be scheduled (and may even exit)
@@ -164,15 +166,15 @@ static void __do_fork(void* aux) {
     if (!pml4_for_each(parent->pml4, duplicate_pte, parent)) goto error;
 #endif
     process_init();
-    succ = fd_table_copy(current, parent);
-    
+    succ = copy_fd_table(current->fd_table, parent->fd_table);
+
     /* Finally, switch to the newly created process. */
     if (succ) {
         sema_up(&parent->fork_sema);
         do_iret(&if_);
     }
 
-    fdt_list_cleanup(current);
+    fd_clean(current);
 error:
     fork_args->success = false;
     sema_up(&parent->fork_sema);
@@ -261,7 +263,7 @@ void process_exit(void) {
         file_close(cur->current_file);
         cur->current_file = NULL;
     }
-    fdt_list_cleanup(cur);
+    fd_clean(cur);
     process_cleanup();
     sema_up(&cur->my_entry->wait_sema);
 }

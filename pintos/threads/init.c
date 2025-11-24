@@ -27,7 +27,7 @@
 #include "userprog/gdt.h"
 #include "userprog/syscall.h"
 #include "userprog/tss.h"
-#include "userprog/fdtable.h"
+#include "userprog/fd_util.h"
 #endif
 #include "tests/threads/tests.h"
 #ifdef VM

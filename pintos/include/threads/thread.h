@@ -116,7 +116,7 @@ struct thread {
     struct list child_list;
     struct child_info* my_entry;
 
-    struct list fdt_block_list;
+    struct fd_table* fd_table;
 
     struct file* current_file;
 #endif
