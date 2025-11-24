@@ -162,9 +162,11 @@ static int syscall_open(const char* file) {
     struct file* open_file = filesys_open(file);
     lock_release(&file_lock);
 
-    if (!open_file) return -1;
+    if (open_file == NULL) return -1;
 
-    return fd_allocate(thread_current()->fd_table, open_file);
+    int result;
+    if ((result = fd_allocate(thread_current()->fd_table, open_file)) == -1) file_close(open_file);
+    return result;
 }
 
 static int syscall_filesize(int fd) {
@@ -203,11 +205,11 @@ static int syscall_read(int fd, void* buffer, unsigned size) {
 static int syscall_write(int fd, const void* buffer, unsigned size) {
     int result;
     if (!valid_address(buffer, false)) syscall_exit(-1);
-    
+
     struct file* file = get_file(thread_current()->fd_table, fd);
 
     if (file == NULL || file == stdin_entry) return -1;
-    
+
     lock_acquire(&file_lock);
     if (file == stdout_entry) {
         putbuf(buffer, size);

@@ -27,12 +27,20 @@ void init_std_fds() {
 
 bool fd_init(struct thread* t) {
     t->fd_table = malloc(sizeof(struct fd_table));
+    if (t->fd_table == NULL) {
+        free(t->fd_table);
+        return false;
+    }
+
     t->fd_table->size = WORD_SIZE;
     t->fd_table->file_list = calloc(t->fd_table->size, sizeof(struct file*));
     t->fd_table->bitmap = calloc(1, sizeof(unsigned long));
 
-    if (t->fd_table == NULL || t->fd_table->file_list == NULL || t->fd_table->bitmap == NULL)
+    if (t->fd_table->file_list == NULL || t->fd_table->bitmap == NULL) {
+        free(t->fd_table->bitmap);
+        free(t->fd_table->file_list);
         return false;
+    }
 
     t->fd_table->next_fd = 2;
     t->fd_table->bitmap[0] |= 3;
@@ -71,7 +79,11 @@ bool copy_fd_table(struct fd_table* dst, struct fd_table* src) {
     unsigned long* new_bitmap = calloc(src->size / WORD_SIZE, sizeof(unsigned long));
     struct file** new_file_list = calloc(src->size, sizeof(struct file*));
 
-    if (new_bitmap == NULL || new_file_list == NULL) return false;
+    if (new_bitmap == NULL || new_file_list == NULL) {
+        free(new_bitmap);
+        free(new_file_list);
+        return false;
+    }
 
     memcpy(new_bitmap, src->bitmap, src->size / sizeof(unsigned long));
     for (int i = 0; i < src->size; i++) {
@@ -143,7 +155,12 @@ static bool fd_table_expand(struct fd_table* fd_t) {
     int new_size = fd_t->size * 2;
     unsigned long* new_bitmap = calloc(new_size / WORD_SIZE, sizeof(unsigned long));
     struct file** new_file_list = calloc(new_size, sizeof(struct file*));
-    if (new_bitmap == NULL || new_file_list == NULL) return false;
+
+    if (new_bitmap == NULL || new_file_list == NULL) {
+        free(new_bitmap);
+        free(new_file_list);
+        return false;
+    }
 
     memcpy(new_bitmap, fd_t->bitmap, fd_t->size / sizeof(unsigned long));
     memcpy(new_file_list, fd_t->file_list, fd_t->size * sizeof(struct file*));
