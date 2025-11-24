@@ -184,9 +184,6 @@ error:
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
 int process_exec(void* f_name) {
-    char* fn_copy = palloc_get_page(0);
-    strlcpy(fn_copy, f_name, PGSIZE);  // 반드시 유효 메모리 확보
-
     char* file_name;
     char* argv[128];
     int argc = 0;
@@ -194,7 +191,7 @@ int process_exec(void* f_name) {
 
     // string token
     char *token, *save_ptr;
-    for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL;
+    for (token = strtok_r(f_name, " ", &save_ptr); token != NULL;
          token = strtok_r(NULL, " ", &save_ptr)) {
         argv[argc++] = token;
     }
@@ -215,7 +212,7 @@ int process_exec(void* f_name) {
     success = load(file_name, argc, argv, &_if);
 
     /* If load failed, quit. */
-    palloc_free_page(fn_copy);
+    palloc_free_page(f_name);
     if (!success) return -1;
 
     /* Start switched process. */

@@ -10,6 +10,7 @@
 #include "threads/interrupt.h"
 #include "threads/loader.h"
 #include "threads/malloc.h"
+#include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "user/syscall.h"
@@ -129,7 +130,11 @@ static pid_t syscall_fork(const char* thread_name, struct intr_frame* if_) {
 
 static int syscall_exec(const char* cmd_line) {
     if (cmd_line == NULL || !valid_address(cmd_line, false)) syscall_exit(-1);
-    process_exec(cmd_line);
+    char* copy_cmd_line = palloc_get_page(0);
+    if (copy_cmd_line == NULL) syscall_exit(-1);
+    strlcpy(copy_cmd_line, cmd_line, PGSIZE);  // 반드시 유효 메모리 확보
+
+    process_exec(copy_cmd_line);
     syscall_exit(-1);
 }
 
