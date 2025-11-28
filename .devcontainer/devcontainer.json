@@ -9,10 +9,17 @@
                 "ms-vscode.cpptools",
                 "ms-azuretools.vscode-docker",
                 "ms-vscode.makefile-tools",
-                "ms-vsliveshare.vsliveshare"
+                "ms-vsliveshare.vsliveshare",
+                "xaver.clang-format"   // Clang-Format 확장
             ],
             "settings": {
-                "terminal.integrated.defaultProfile.linux": "bash"
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "editor.formatOnSave": true, // 저장 시 자동 포맷팅 켜기
+                "editor.defaultFormatter": "xaver.clang-format", // 기본 포맷터 설정
+                "[c]": {
+                    "editor.defaultFormatter": "xaver.clang-format"
+                },
+                "clang-format.executable": "/usr/bin/clang-format" // clang-format 실행 파일 경로
             }
         }
     }

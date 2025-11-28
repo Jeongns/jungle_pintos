@@ -1,0 +1,22 @@
+# .clang-format
+Language: Cpp
+# Linux 스타일이 없다면 LLVM이나 Google을 기반으로 하되, 
+# 아래 설정을 통해 커스텀하면 됩니다.
+BasedOnStyle: LLVM
+
+# 핀토스/C언어 표준에 맞춘 덮어쓰기 설정
+IndentWidth: 4                              # 핀토스 원본은 보통 8칸 탭을 쓰거나 4칸을 씁니다. (취향껏 4 or 8)
+TabWidth: 4                                 # 탭의 길이
+UseTab: Always                              # 핀토스는 탭(Tab) 사용을 선호하는 편입니다. (싫으면 Never)
+
+BreakBeforeBraces: Linux                    # 중괄호 위치를 Linux 스타일(함수는 다음 줄, 제어문은 같은 줄)로 설정
+AllowShortFunctionsOnASingleLine: None      # 반환 타입과 함수 이름 같은 줄에 작성
+SpaceBeforeParens: ControlStatements        # 제어문 괄호 앞 뒤에 공백 추가
+IndentCaseLabels: true                      # switch 문 안에서 case 들여쓰기
+ColumnLimit: 100                            # 100자 제한
+
+AllowShortBlocksOnASingleLine: Never        # 짧은 블록 한 줄에 쓰는 거 금지
+AllowShortIfStatementsOnASingleLine: Never  # if문 뒤에 실행문 바로 붙이는 거 금지
+AlignTrailingComments: true                 # 주석 정렬
+
+SortIncludes: false                         # 헤더파일 순서 자동 정렬 방지 (핀토스 빌드 꼬임 방지)
