@@ -549,55 +549,50 @@ static bool validate_segment(const struct Phdr *phdr, struct file *file)
 /* load() helpers. */
 static bool install_page(void *upage, void *kpage, bool writable);
 
-/* Loads a segment starting at offset OFS in FILE at address
- * UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
- * memory are initialized, as follows:
- *
- * - READ_BYTES bytes at UPAGE must be read from FILE
- * starting at offset OFS.
- *
- * - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
- *
- * The pages initialized by this function must be writable by the
- * user process if WRITABLE is true, read-only otherwise.
- *
- * Return true if successful, false if a memory allocation error
- * or disk read error occurs. */
+/* 하드디스크에 저장된 프로그램 파일을
+ * 4KB단위로 메모리에 옮기는 작업을 합니다. */
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t read_bytes,
 						 uint32_t zero_bytes, bool writable)
 {
 	ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
+	/*  pg_ofs는 주소 내에서 페이지 오프셋을 반환한다.
+	 *  upage(가상주소)가 페이지의 시작주소인지 확인한다.*/
 	ASSERT(pg_ofs(upage) == 0);
 	ASSERT(ofs % PGSIZE == 0);
 
-	file_seek(file, ofs);
+	file_seek(file, ofs); // 파일의 특정 위치(ofs)로 이동
+
 	while (read_bytes > 0 || zero_bytes > 0) {
 		/* Do calculate how to fill this page.
-		 * We will read PAGE_READ_BYTES bytes from FILE
-		 * and zero the final PAGE_ZERO_BYTES bytes. */
+		 * 한 번에 최대 4KB(PGSIZE)씩만 읽음
+		 * 남은 데이터가 3KB면 → 3KB만 읽고, 나머지 1KB는 0으로 채움 */
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* Get a page of memory. */
-		uint8_t *kpage = palloc_get_page(PAL_USER);
+		uint8_t *kpage = palloc_get_page(PAL_USER); // 커널메모리의 유저풀에서 할당됨
 		if (kpage == NULL)
 			return false;
 
-		/* Load this page. */
+		// 파일 내용을 메모리에 복사한다.
 		if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes) {
 			palloc_free_page(kpage);
 			return false;
 		}
+
+		/* 읽지 않은 부분은 0으로 초기화한다.
+		 * kpage + page_read_bytesf(시작주소)를 page_zero_bytes만큼 0으로 채운다.
+		 */
 		memset(kpage + page_read_bytes, 0, page_zero_bytes);
 
-		/* Add the page to the process's address space. */
+		// 가상주소 (upage)를 물리주소 (kpage)와 매핑
 		if (!install_page(upage, kpage, writable)) {
 			printf("fail\n");
 			palloc_free_page(kpage);
 			return false;
 		}
 
-		/* Advance. */
+		// 카운터 업데이트해서 다음 페이지로 이동한다
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
@@ -709,6 +704,7 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* TODO: Set up aux to pass information to the lazy_load_segment. */
+		// spt에 등록만 한다. (물리메모리 할당, 파일 읽기, PML4 매핑 모두 안 함)
 		void *aux = NULL;
 		if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux))
 			return false;

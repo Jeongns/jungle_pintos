@@ -173,6 +173,10 @@ static bool vm_do_claim_page(struct page *page)
 /* Initialize new supplemental page table */
 void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED)
 {
+	// TODO: 해시테이블 초기화
+	/* hash_init(&spt->pages, page_hash, page_less, NULL);
+	 * page_hash ← page 구조체에서 va를 꺼내서 해시값을 만드는 함수
+	 * page_less ← 두 page를 비교할 때 키로 어덯게 비교하는지(va로 설정하면 됨) 지정하는 함수 */
 }
 
 /* Copy supplemental page table from src to dst */
