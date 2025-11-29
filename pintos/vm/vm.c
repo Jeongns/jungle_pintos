@@ -3,6 +3,7 @@
 #include "threads/malloc.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
+#include <string.h>
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -175,6 +176,7 @@ static bool vm_do_claim_page(struct page *page)
 static uint64_t spt_hash_func(const struct hash_elem *e, void *aux);
 static bool spt_hash_less_func(const struct hash_elem *a, const struct hash_elem *b, void *aux);
 static void spt_kill_action_func(struct hash_elem *e, void *aux UNUSED);
+static void hash_copy_func(struct hash_elem *e, void *aux);
 
 /* Initialize new supplemental page table */
 void supplemental_page_table_init(struct supplemental_page_table *spt)
@@ -184,9 +186,12 @@ void supplemental_page_table_init(struct supplemental_page_table *spt)
 }
 
 /* Copy supplemental page table from src to dst */
-bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
-								  struct supplemental_page_table *src UNUSED)
+bool supplemental_page_table_copy(struct supplemental_page_table *dst,
+								  struct supplemental_page_table *src)
 {
+	src->spt_hash.aux = dst;
+	hash_apply(&src->spt_hash, hash_copy_func);
+	src->spt_hash.aux = NULL;
 }
 
 /* Free the resource hold by the supplemental page table */
@@ -217,4 +222,15 @@ static void spt_kill_action_func(struct hash_elem *e, void *aux UNUSED)
 		swap_out(page);
 
 	vm_dealloc_page(page);
+}
+
+static void hash_copy_func(struct hash_elem *e, void *aux)
+{
+	struct supplemental_page_table *dst_spt = aux;
+
+	struct page *src_page = hash_entry(e, struct page, spt_hash_elem);
+	struct page *dst_page = malloc(sizeof(struct page));
+	memcpy(dst_page, src_page, sizeof(struct page));
+
+	hash_insert(&dst_spt->spt_hash, dst_page);
 }
