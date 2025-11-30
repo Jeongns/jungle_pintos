@@ -146,8 +146,11 @@ static struct frame *vm_evict_frame(void)
  * space.*/
 static struct frame *vm_get_frame(void)
 {
-	struct frame *frame = NULL;
-	/* TODO: Fill this function. */
+	struct frame *frame = palloc_get_page(PAL_ZERO | PAL_USER);
+
+	// TODO: 스왑 기능 구현
+	if (frame == NULL)
+		PANIC("TODO");
 
 	ASSERT(frame != NULL);
 	ASSERT(frame->page == NULL);
