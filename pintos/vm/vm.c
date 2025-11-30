@@ -146,10 +146,12 @@ static struct frame *vm_evict_frame(void)
  * space.*/
 static struct frame *vm_get_frame(void)
 {
-	struct frame *frame = palloc_get_page(PAL_ZERO | PAL_USER);
+	struct frame *frame = malloc(sizeof(struct frame));
+	frame->kva = palloc_get_page(PAL_ZERO | PAL_USER);
+	frame->page = NULL;
 
 	// TODO: 스왑 기능 구현
-	if (frame == NULL)
+	if (frame->kva == NULL)
 		PANIC("TODO");
 
 	ASSERT(frame != NULL);
