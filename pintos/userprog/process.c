@@ -733,7 +733,7 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 		*vm_file_aux = (struct vm_file_aux){
 			.file = file,
 			.ofs = ofs,
-			.page_read_bytes = page_read_bytes //
+			.page_read_bytes = page_read_bytes,
 		};
 		if (!vm_alloc_page_with_initializer(VM_FILE, upage, writable, lazy_load_segment,
 											vm_file_aux))
