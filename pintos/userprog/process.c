@@ -389,10 +389,7 @@ static bool validate_segment(const struct Phdr *, struct file *);
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t read_bytes,
 						 uint32_t zero_bytes, bool writable);
 
-/* Loads an ELF executable from FILE_NAME into the current thread.
- * Stores the executable's entry point into *RIP
- * and its initial stack pointer into *RSP.
- * Returns true if successful, false otherwise. */
+// ELF실행파일을 메모리에 로드하고 프로세스 실행을 준비하는 함수
 static bool load(const char *file_name, int argc, char **argv, struct intr_frame *if_)
 {
 	struct thread *t = thread_current();
@@ -402,13 +399,13 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 	bool success = false;
 	int i;
 
-	/* Allocate and activate page directory. */
-	t->pml4 = pml4_create();
+	// 2. 가상 메모리 공간 생성하고 CR3 레지스터에 새 PML4 주소 설정
+	t->pml4 = pml4_create(); // 새 프로세스의 가상 메모리 공간 생성
 	if (t->pml4 == NULL)
 		goto done;
 	process_activate(thread_current());
 
-	/* Open executable file. */
+	// 3. 실행파일 열기
 	lock_acquire(&file_lock);
 	file = filesys_open(file_name);
 	lock_release(&file_lock);
@@ -417,10 +414,11 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 		goto done;
 	}
 
+	// 4. 실행파일 쓰기 방지 (실행중인 파일은 수정 금지)
 	file_deny_write(file);
 	t->current_file = file;
 
-	/* Read and verify executable header. */
+	// 5. ELF헤더 읽기 및 검증
 	if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
 		memcmp(ehdr.e_ident, "\177ELF\2\1\1", 7) || ehdr.e_type != 2 ||
 		ehdr.e_machine != 0x3E // amd64
@@ -429,10 +427,11 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 		goto done;
 	}
 
-	/* Read program headers. */
-	file_ofs = ehdr.e_phoff;
+	// 6. program headers 읽기
+	file_ofs = ehdr.e_phoff; // ELF 헤더 다음위치를 가리키는 오프셋
+	// 모든 프로그램 헤더를 순회한다. 각 헤더는 세그먼트(코드, 데이터 등)를 설명한다
 	for (i = 0; i < ehdr.e_phnum; i++) {
-		struct Phdr phdr;
+		struct Phdr phdr; // 현재 프로그램 헤더
 
 		if (file_ofs < 0 || file_ofs > file_length(file))
 			goto done;
@@ -441,6 +440,8 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 		if (file_read(file, &phdr, sizeof phdr) != sizeof phdr)
 			goto done;
 		file_ofs += sizeof phdr;
+
+		// 7. program header 타입별 처리
 		switch (phdr.p_type) {
 			case PT_NULL:
 			case PT_NOTE:
@@ -449,28 +450,32 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 			default:
 				/* Ignore this segment. */
 				break;
-			case PT_DYNAMIC:
+			case PT_DYNAMIC: // pintos는 정적 링킹만 지원하므로 동적 라이브러리 요구시 로드 실패
 			case PT_INTERP:
 			case PT_SHLIB:
 				goto done;
-			case PT_LOAD:
+
+			case PT_LOAD: // 8. 로드 가능 세그먼트 처리 (실제 코드/데이터를 메모리에 로드)
+				/* R+E → writable = false (코드)
+				 * R+W → writable = true  (데이터)  */
 				if (validate_segment(&phdr, file)) {
-					bool writable = (phdr.p_flags & PF_W) != 0;
-					uint64_t file_page = phdr.p_offset & ~PGMASK;
-					uint64_t mem_page = phdr.p_vaddr & ~PGMASK;
+					bool writable = (phdr.p_flags & PF_W) != 0; // 어떤 권한인지 결정
+					uint64_t file_page = phdr.p_offset & ~PGMASK; // "파일 어디서" 읽을지 결정
+					uint64_t mem_page = phdr.p_vaddr & ~PGMASK; // "어디에" 로드할지 결정
 					uint64_t page_offset = phdr.p_vaddr & PGMASK;
 					uint32_t read_bytes, zero_bytes;
-					if (phdr.p_filesz > 0) {
-						/* Normal segment.
-						 * Read initial part from disk and zero the rest. */
+
+					// 9. 읽기/제로 바이트 계산
+					if (phdr.p_filesz >
+						0) { // 파일에 실제 데이터가 있는 경우. 코드, 데이터, rodata 섹션 (VM_FILE)
 						read_bytes = page_offset + phdr.p_filesz;
 						zero_bytes = (ROUND_UP(page_offset + phdr.p_memsz, PGSIZE) - read_bytes);
-					} else {
-						/* Entirely zero.
-						 * Don't read anything from disk. */
+					} else { // .bss 섹션 (VM_ANON)
 						read_bytes = 0;
 						zero_bytes = ROUND_UP(page_offset + phdr.p_memsz, PGSIZE);
 					}
+
+					// 10. 세그먼트 로드
 					if (!load_segment(file, file_page, (void *)mem_page, read_bytes, zero_bytes,
 									  writable))
 						goto done;
@@ -480,11 +485,13 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 		}
 	}
 
-	/* Set up stack. */
-	if (!setup_stack(if_))
+	// 11. 스택 설정
+	if (!setup_stack(if_)) // 사용자 스택 생성 & 스택 포인터(rsp) 초기화
 		goto done;
+
 	build_user_stack(if_, argc, argv);
-	/* Start address. */
+
+	// 12. 엔트리 포인트 설정 (rip: instruction pointer) 보통 _start 함수
 	if_->rip = ehdr.e_entry;
 
 	/* TODO: Your code goes here.
@@ -680,20 +687,18 @@ static bool lazy_load_segment(struct page *page, void *aux)
 	/* TODO: VA is available when calling this function. */
 }
 
-/* Loads a segment starting at offset OFS in FILE at address
- * UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
- * memory are initialized, as follows:
+/* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드합니다.
+ * 총 READ_BYTES + ZERO_BYTES 바이트만큼의 가상 메모리가 초기화되며,
+ * 다음과 같이 처리됩니다:
  *
- * - READ_BYTES bytes at UPAGE must be read from FILE
- * starting at offset OFS.
+ * - UPAGE에서 READ_BYTES 바이트는 FILE의 오프셋 OFS부터 읽어옵니다.
+ * - UPAGE + READ_BYTES에서 ZERO_BYTES 바이트는 0으로 채웁니다.
  *
- * - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
+ * 이 함수가 초기화한 페이지는 WRITABLE이 true이면 사용자 프로세스가
+ * 쓸 수 있고, 그렇지 않으면 읽기 전용입니다.
  *
- * The pages initialized by this function must be writable by the
- * user process if WRITABLE is true, read-only otherwise.
- *
- * Return true if successful, false if a memory allocation error
- * or disk read error occurs. */
+ * 성공 시 true 메모리 할당 오류나 디스크 읽기 오류 시 false를 반환합니다. */
+
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t read_bytes,
 						 uint32_t zero_bytes, bool writable)
 {

@@ -44,11 +44,12 @@ static bool uninit_initialize(struct page *page, void *kva)
 {
 	struct uninit_page *uninit = &page->uninit;
 
-	/* Fetch first, page_initialize may overwrite the values */
+	// page->uninit이 page->anon 또는 page->file로 덮어씌워지기 때문에 정보를 미리 복사해둔다
 	vm_initializer *init = uninit->init;
 	void *aux = uninit->aux;
 
-	/* TODO: You may need to fix this function. */
+	/* TODO: anon_initializer/file_backed_initializer 수정해야 함  */
+	// 타입에 따라 initializer 가 실행된다
 	return uninit->page_initializer(page, uninit->type, kva) && (init ? init(page, aux) : true);
 }
 

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "threads/palloc.h"
 #include "hash.h"
+#include "mmu.h"
 
 enum vm_type {
 	/* page not initialized */
@@ -34,13 +35,15 @@ enum vm_type {
 
 struct page_operations;
 struct thread;
+struct intr_frame;
 
-#define VM_TYPE(type) ((type) & 7)
+#define VM_TYPE(type) ((type)&7)
 
-/* The representation of "page".
- * This is kind of "parent class", which has four "child class"es, which are
- * uninit_page, file_page, anon_page, and page cache (project4).
- * DO NOT REMOVE/MODIFY PREDEFINED MEMBER OF THIS STRUCTURE. */
+/* "page"의 표현입니다.
+ * 이것은 일종의 "부모 클래스" 역할을 하며,
+ * 네 개의 "자식 클래스"인 uninit_page, file_page, anon_page,
+ * 그리고 프로젝트 4의 page cache를 포함합니다.
+ * 이 구조체에 미리 정의된 멤버는 제거하거나 수정하지 마십시오. */
 struct page {
 	const struct page_operations *operations;
 	void *va;			 /* Address in terms of user space */
@@ -48,6 +51,7 @@ struct page {
 
 	/* Your implementation */
 	struct hash_elem spt_hash_elem;
+	bool writable;
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -67,10 +71,10 @@ struct frame {
 	struct page *page;
 };
 
-/* The function table for page operations.
- * This is one way of implementing "interface" in C.
- * Put the table of "method" into the struct's member, and
- * call it whenever you needed. */
+/* 페이지 작업을 위한 함수 테이블입니다.
+ * 이것은 C에서 "인터페이스"를 구현하는 한 방법입니다.
+ * "메서드" 테이블을 구조체의 멤버에 넣고,
+ * 필요할 때마다 호출합니다. */
 struct page_operations {
 	bool (*swap_in)(struct page *, void *);
 	bool (*swap_out)(struct page *);
@@ -91,7 +95,6 @@ struct supplemental_page_table {
 	struct hash spt_hash;
 };
 
-#include "threads/thread.h"
 void supplemental_page_table_init(struct supplemental_page_table *spt);
 bool supplemental_page_table_copy(struct supplemental_page_table *dst,
 								  struct supplemental_page_table *src);

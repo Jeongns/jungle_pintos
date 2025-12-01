@@ -217,21 +217,21 @@ void *pml4_get_page(uint64_t *pml4, const void *uaddr)
 	return NULL;
 }
 
-/* Adds a mapping in page map level 4 PML4 from user virtual page
- * UPAGE to the physical frame identified by kernel virtual address KPAGE.
- * UPAGE must not already be mapped. KPAGE should probably be a page obtained
- * from the user pool with palloc_get_page().
- * If WRITABLE is true, the new page is read/write;
- * otherwise it is read-only.
- * Returns true if successful, false if memory allocation
- * failed. */
+/* 사용자 가상 페이지 UPAGE를 커널 가상 주소 KPAGE로 식별되는 물리 프레임에
+ * PML4(Page Map Level 4) 페이지 테이블에서 매핑을 추가합니다.
+ * UPAGE는 이미 매핑되어 있으면 안 됩니다. KPAGE는 보통 palloc_get_page()
+ * 로 사용자 풀에서 얻은 페이지여야 합니다.
+ * WRITABLE이 true이면 새 페이지는 읽기/쓰기 가능하며,
+ * 그렇지 않으면 읽기 전용입니다.
+ * 성공 시 true를 반환하고, 메모리 할당 실패 시 false를 반환합니다. */
 bool pml4_set_page(uint64_t *pml4, void *upage, void *kpage, bool rw)
 {
-	ASSERT(pg_ofs(upage) == 0);
-	ASSERT(pg_ofs(kpage) == 0);
-	ASSERT(is_user_vaddr(upage));
+	ASSERT(pg_ofs(upage) == 0);	  // 정렬 확인
+	ASSERT(pg_ofs(kpage) == 0);	  // 정렬 확인
+	ASSERT(is_user_vaddr(upage)); // upage가 유저공간 주소인지 확인
 	ASSERT(pml4 != base_pml4);
 
+	// upage에 해당하는 PTE를 찾거나 생성합니다
 	uint64_t *pte = pml4e_walk(pml4, (uint64_t)upage, 1);
 
 	if (pte)
