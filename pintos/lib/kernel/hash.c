@@ -81,10 +81,7 @@ void hash_destroy(struct hash *h, hash_action_func *destructor)
 	free(h->buckets);
 }
 
-/* Inserts NEW into hash table H and returns a null pointer, if
-   no equal element is already in the table.
-   If an equal element is already in the table, returns it
-   without inserting NEW. */
+// 있으면 null을 반환, 이미 있으면 해당 hash_elem을 반환
 struct hash_elem *hash_insert(struct hash *h, struct hash_elem *new)
 {
 	struct list *bucket = find_bucket(h, new);

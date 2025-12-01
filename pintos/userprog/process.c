@@ -541,6 +541,34 @@ static bool validate_segment(const struct Phdr *phdr, struct file *file)
 	return true;
 }
 
+static void build_user_stack(struct intr_frame *if_, int argc, char **argv)
+{
+	char *uargv[argc];
+	for (int i = argc - 1; i >= 0; i--) {
+		int len = strlen(argv[i]) + 1;
+		uargv[i] = (if_->rsp -= len);
+		memcpy(if_->rsp, argv[i], len);
+	}
+
+	// paading
+	char *temp = if_->rsp;
+	if_->rsp &= ~0xF;
+	if (temp - if_->rsp > 0)
+		memset(if_->rsp, 0, temp - if_->rsp);
+
+	// null
+	*(char **)(if_->rsp -= 8) = 0;
+
+	// argv pointer
+	if_->rsp -= argc * sizeof(char *);
+	memcpy((void *)if_->rsp, uargv, argc * sizeof(char *));
+
+	if_->R.rdi = argc;
+	if_->R.rsi = if_->rsp;
+
+	*(char **)(if_->rsp -= 8) = 0;
+}
+
 #ifndef VM
 /* Codes of this block will be ONLY USED DURING project 2.
  * If you want to implement the function for whole project 2, implement it
@@ -620,34 +648,6 @@ static bool setup_stack(struct intr_frame *if_)
 			palloc_free_page(kpage);
 	}
 	return success;
-}
-
-static void build_user_stack(struct intr_frame *if_, int argc, char **argv)
-{
-	char *uargv[argc];
-	for (int i = argc - 1; i >= 0; i--) {
-		int len = strlen(argv[i]) + 1;
-		uargv[i] = (if_->rsp -= len);
-		memcpy(if_->rsp, argv[i], len);
-	}
-
-	// paading
-	char *temp = if_->rsp;
-	if_->rsp &= ~0xF;
-	if (temp - if_->rsp > 0)
-		memset(if_->rsp, 0, temp - if_->rsp);
-
-	// null
-	*(char **)(if_->rsp -= 8) = 0;
-
-	// argv pointer
-	if_->rsp -= argc * sizeof(char *);
-	memcpy((void *)if_->rsp, uargv, argc * sizeof(char *));
-
-	if_->R.rdi = argc;
-	if_->R.rsi = if_->rsp;
-
-	*(char **)(if_->rsp -= 8) = 0;
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
