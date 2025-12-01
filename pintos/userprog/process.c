@@ -400,13 +400,17 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 	struct file *file = NULL;
 	off_t file_ofs;
 	bool success = false;
-	int i;
 
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create();
-	if (t->pml4 == NULL)
+	if (t->pml4 == NULL) {
+		printf("load: %s: error while creating pml4 \n", file_name);
 		goto done;
+	}
 	process_activate(thread_current());
+
+	/* initialize supplemental page table */
+	supplemental_page_table_init(&thread_current()->spt);
 
 	/* Open executable file. */
 	lock_acquire(&file_lock);
@@ -431,16 +435,19 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 
 	/* Read program headers. */
 	file_ofs = ehdr.e_phoff;
-	for (i = 0; i < ehdr.e_phnum; i++) {
+	for (int i = 0; i < ehdr.e_phnum; i++) {
 		struct Phdr phdr;
 
 		if (file_ofs < 0 || file_ofs > file_length(file))
 			goto done;
+
 		file_seek(file, file_ofs);
 
 		if (file_read(file, &phdr, sizeof phdr) != sizeof phdr)
 			goto done;
+
 		file_ofs += sizeof phdr;
+
 		switch (phdr.p_type) {
 			case PT_NULL:
 			case PT_NOTE:
@@ -483,6 +490,7 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 	/* Set up stack. */
 	if (!setup_stack(if_))
 		goto done;
+
 	build_user_stack(if_, argc, argv);
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
@@ -678,6 +686,33 @@ static bool lazy_load_segment(struct page *page, void *aux)
 	/* TODO: Load the segment from the file */
 	/* TODO: This called when the first page fault occurs on address VA. */
 	/* TODO: VA is available when calling this function. */
+	struct file_page file_page = page->file;
+
+	struct file *file = file_page.file;
+	off_t ofs = file_page.offset;
+	uint32_t page_read_bytes = file_page.page_read_bytes;
+	uint32_t page_zero_bytes = file_page.page_zero_bytes;
+
+	ASSERT((page_read_bytes + page_zero_bytes) % PGSIZE == 0);
+	ASSERT(ofs % PGSIZE == 0);
+
+	printf("file = %p, aux = %p, type = %d\n", file, aux, page->type);
+	printf("asdfasdf %u, %u\n", page_read_bytes, page_zero_bytes);
+
+	file_seek(file, ofs);
+
+	/* Get a page of memory */
+	uint8_t *kpage = page->frame->kva;
+
+	/* Load the page */
+	if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes) {
+		palloc_free_page(kpage);
+		return false;
+	}
+	memset(kpage + page_read_bytes, 0, page_zero_bytes);
+
+	/* vm_do_claim_page에서 이미 pml4에 등록했으므로 추가로 등록할 필요 없음 */
+	return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -708,9 +743,31 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: Set up aux to pass information to the lazy_load_segment. */
 		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux))
+		enum vm_type type = VM_ANON;
+		/* TODO: Set up aux to pass information to the lazy_load_segment. */
+		if (page_read_bytes > 0) {
+			/* 파일 내용이 있는 경우, VM_FILE 페이지 생성 */
+			struct vm_file_aux *file_aux = (struct vm_file_aux *)malloc(sizeof(struct vm_file_aux));
+			if (!file_aux)
+				return false;
+
+			file_aux->file = file;
+			file_aux->ofs = ofs;
+			file_aux->page_read_bytes = page_read_bytes;
+			file_aux->page_zero_bytes = page_zero_bytes;
+
+			aux = file_aux;
+			type = VM_FILE;
+		}
+
+		bool result;
+		if (type == VM_ANON)
+			result = vm_alloc_page_with_initializer(type, upage, writable, NULL, NULL);
+		else if (type == VM_FILE)
+			result = vm_alloc_page_with_initializer(type, upage, writable, lazy_load_segment, aux);
+
+		if (!result)
 			return false;
 
 		/* Advance. */
@@ -724,7 +781,6 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 /* Create a PAGE of stack at the USER_STACK. Return true on success. */
 static bool setup_stack(struct intr_frame *if_)
 {
-	bool success = false;
 	void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE);
 
 	/* TODO: Map the stack on stack_bottom and claim the page immediately.
@@ -732,6 +788,14 @@ static bool setup_stack(struct intr_frame *if_)
 	 * TODO: You should mark the page is stack. */
 	/* TODO: Your code goes here */
 
-	return success;
+	if (!vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, true, NULL, NULL))
+		return false;
+
+	if (!vm_claim_page(stack_bottom))
+		return false;
+
+	if_->rsp = USER_STACK;
+
+	return true;
 }
 #endif /* VM */

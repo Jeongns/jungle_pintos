@@ -3,6 +3,16 @@
 
 #include "threads/thread.h"
 
+struct vm_file_aux {
+	struct file *file;
+	off_t ofs;
+	uint32_t page_read_bytes;
+	uint32_t page_zero_bytes;
+};
+
+struct vm_anon_aux {
+};
+
 tid_t process_create_initd(const char *file_name);
 tid_t process_fork(const char *name, struct intr_frame *if_);
 int process_exec(void *f_name);

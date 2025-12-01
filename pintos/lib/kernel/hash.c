@@ -81,7 +81,7 @@ void hash_destroy(struct hash *h, hash_action_func *destructor)
 	free(h->buckets);
 }
 
-// 있으면 null을 반환, 이미 있으면 해당 hash_elem을 반환
+// 성공적으로 삽입하면 null을 반환, 이미 있으면 해당 hash_elem을 반환
 struct hash_elem *hash_insert(struct hash *h, struct hash_elem *new)
 {
 	struct list *bucket = find_bucket(h, new);
@@ -91,7 +91,6 @@ struct hash_elem *hash_insert(struct hash *h, struct hash_elem *new)
 		insert_elem(h, bucket, new);
 
 	rehash(h);
-
 	return old;
 }
 

@@ -18,6 +18,7 @@ enum vm_type {
 
 	/* Auxillary bit flag marker for store information. You can add more
 	 * markers, until the value is fit in the int. */
+	/* 스택인 페이지 */
 	VM_MARKER_0 = (1 << 3),
 	VM_MARKER_1 = (1 << 4),
 
@@ -35,7 +36,7 @@ enum vm_type {
 struct page_operations;
 struct thread;
 
-#define VM_TYPE(type) ((type) & 7)
+#define VM_TYPE(type) ((type)&7)
 
 /* The representation of "page".
  * This is kind of "parent class", which has four "child class"es, which are
@@ -48,6 +49,8 @@ struct page {
 
 	/* Your implementation */
 	struct hash_elem spt_hash_elem;
+	bool writable;
+	enum vm_type type;
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
