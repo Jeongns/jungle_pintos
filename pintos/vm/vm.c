@@ -2,9 +2,9 @@
 
 #include "threads/malloc.h"
 #include "threads/mmu.h"
+#include "threads/vaddr.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
-#include "vaddr.h"
 #include <string.h>
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
