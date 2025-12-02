@@ -412,10 +412,15 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 	}
 	process_activate(thread_current());
 
+<<<<<<< HEAD
 /* initialize supplemental page table */
 #ifdef VM
 	supplemental_page_table_init(&thread_current()->spt);
 #endif
+	== == == =
+				 /* initialize supplemental page table */
+		supplemental_page_table_init(&thread_current()->spt);
+>>>>>>> 25cc120ff5e178890fa36b899c8cc32d94b3a004
 
 	/* Open executable file. */
 	lock_acquire(&file_lock);
