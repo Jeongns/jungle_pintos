@@ -284,14 +284,6 @@ void process_exit(void)
 	if (curr->pml4 != NULL)
 		printf("%s: exit(%d)\n", curr->name, curr->my_entry->exit_status);
 
-	if (curr->current_file) {
-		file_allow_write(curr->current_file);
-		lock_acquire(&file_lock);
-		file_close(curr->current_file);
-		lock_release(&file_lock);
-		curr->current_file = NULL;
-	}
-
 	fd_clean(curr);
 	process_cleanup();
 	sema_up(&curr->my_entry->wait_sema);
@@ -301,6 +293,14 @@ void process_exit(void)
 static void process_cleanup(void)
 {
 	struct thread *curr = thread_current();
+	
+	if (curr->current_file) {
+		file_allow_write(curr->current_file);
+		lock_acquire(&file_lock);
+		file_close(curr->current_file);
+		lock_release(&file_lock);
+		curr->current_file = NULL;
+	}
 #ifdef VM
 	supplemental_page_table_kill(&curr->spt);
 #endif
