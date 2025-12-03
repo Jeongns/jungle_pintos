@@ -74,7 +74,7 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 			goto err;
 	}
 
-	// page구조체에 값 넣기
+	// page 구조체에 값 넣기
 	uninit_new(page, upage, init, type, aux, initializer);
 	page->writable = writable;
 
@@ -268,16 +268,11 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst,
 	// 1. dst를 비운다
 	hash_clear(&dst->spt_hash, remove_page_from_spt);
 
-	// 2.src 순회 중 dst 참조를 위해 aux에 dst 할당
-	src->spt_hash.aux = dst;
-
-	// 3. 순회를 하며 copy_page_from_spt 호출
+	// 2. 순회를 하며 copy_page_from_spt 호출
 	hash_apply(&src->spt_hash, copy_page_from_spt);
-	src->spt_hash.aux = NULL;
 
 	return true;
 }
-
 /* Free the resource hold by the supplemental page table */
 void supplemental_page_table_kill(struct supplemental_page_table *spt)
 {
@@ -315,15 +310,43 @@ static void remove_page_from_spt(struct hash_elem *elem, void *aux UNUSED)
 	vm_dealloc_page(curr_page);
 }
 
-// spt의 해당 page를 다른 spt로 복사합니다
+// fork시 부모 프로세스의 spt에서 자식 프로세스의 spt로 한 개의 페이지를 복사한다
+// @param elem: 부모 SPT의 한 페이지를 가리키는 hash element
 static void copy_page_from_spt(struct hash_elem *elem, void *aux)
 {
-	// TODO 구조 수정
-	struct supplemental_page_table *dst_spt = aux;
-
+	// 1. 부모 페이지 가져온다
 	struct page *src_page = hash_entry(elem, struct page, spt_hash_elem);
-	struct page *dst_page = malloc(sizeof(struct page));
-	memcpy(dst_page, src_page, sizeof(struct page));
+	void *va = src_page->va;
+	bool writable = src_page->writable;
 
-	hash_insert(&dst_spt->spt_hash, dst_page);
+	switch (VM_TYPE(src_page->operations->type)) {
+		case VM_UNINIT:
+			// AUX 값 복사하기
+			enum vm_type type = page_get_type(src_page);
+			size_t aux_size = type == VM_FILE ? sizeof(struct file_page) : sizeof(struct anon_page);
+			void *dst_aux = malloc(aux_size);
+			memcpy(dst_aux, src_page->uninit.aux, aux_size);
+
+			vm_alloc_page_with_initializer(type, va, writable, src_page->uninit.init, dst_aux);
+			return;
+		case VM_FILE:
+			vm_alloc_page_with_initializer(VM_FILE, va, writable, NULL, &src_page->file);
+			break;
+		case VM_ANON:
+			vm_alloc_page_with_initializer(VM_ANON, va, writable, NULL, &src_page->anon);
+			break;
+	}
+
+	// 자식 페이지 찾기
+	struct page *dst_page = spt_find_page(&thread_current()->spt, src_page->va);
+
+	if (dst_page == NULL)
+		PANIC("copy_page_from_spt: dst_page not found.");
+
+	// 프레임 즉시 할당
+	if (!vm_do_claim_page(dst_page))
+		return;
+
+	// 물리 메모리 복사
+	memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
 }
