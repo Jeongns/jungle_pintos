@@ -462,14 +462,13 @@ static bool load(const char *file_name, int argc, char **argv, struct intr_frame
 					uint64_t mem_page = phdr.p_vaddr & ~PGMASK;
 					uint64_t page_offset = phdr.p_vaddr & PGMASK;
 					uint32_t read_bytes, zero_bytes;
-					if (phdr.p_filesz > 0) {
-						/* Normal segment.
-						 * Read initial part from disk and zero the rest. */
+					if (phdr.p_filesz > 0) { // p_filesz: 파일에서 읽을 크기
+						// 파일 있음. file type (.text, .data)
 						read_bytes = page_offset + phdr.p_filesz;
 						zero_bytes = (ROUND_UP(page_offset + phdr.p_memsz, PGSIZE) - read_bytes);
 					} else {
-						/* Entirely zero.
-						 * Don't read anything from disk. */
+						// 디스크에서 읽을 파일 없음. anon type. (.bss) 여기서 load_segment하게 되면
+						// 파일정보는 불필요한데 저장하게 된다.
 						read_bytes = 0;
 						zero_bytes = ROUND_UP(page_offset + phdr.p_memsz, PGSIZE);
 					}
@@ -675,7 +674,7 @@ static bool install_page(void *upage, void *kpage, bool writable)
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-static bool lazy_load_segment(struct page *page, void *aux)
+bool lazy_load_segment(struct page *page, void *aux)
 {
 	struct file_page *file_page_aux = (struct file_page *)aux;
 	struct file *file = file_page_aux->file;
@@ -711,6 +710,7 @@ static bool lazy_load_segment(struct page *page, void *aux)
  *
  * Return true if successful, false if a memory allocation error
  * or disk read error occurs. */
+// 파일 전용 로더
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t read_bytes,
 						 uint32_t zero_bytes, bool writable)
 {
@@ -725,7 +725,7 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: Set up aux to pass information to the lazy_load_segment. */
+		// 나중에 읽을 거지만, 어떻게 읽을지는 저장해두자.
 		struct file_page *file_page_aux = malloc(sizeof(*file_page_aux));
 		*file_page_aux = (struct file_page){
 			.file = file,
@@ -746,6 +746,7 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 }
 
 /* Create a PAGE of stack at the USER_STACK. Return true on success. */
+// 스택 전용 로더
 static bool setup_stack(struct intr_frame *if_)
 {
 	// bool success = false;

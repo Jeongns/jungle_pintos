@@ -5,6 +5,7 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "vm/inspect.h"
+#include "userprog/process.h"
 #include <string.h>
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
@@ -40,14 +41,13 @@ static struct frame *vm_get_victim(void);
 static bool vm_do_claim_page(struct page *page);
 static struct frame *vm_evict_frame(void);
 
-/* Create the pending page object with initializer. If you want to create a
- * page, do not create it directly and make it through this function or
- * `vm_alloc_page`. */
-// page 생성 + spt에 등록하는 함수입니다
+/* initializer를 사용하여 pending page object를 생성한다
+ * 페이지를 직접 생성하지 말고, 이 함수나 vm_alloc_page를 통해 생성해야 한다. */
+// page 생성 + initializer 설정 + spt에 등록하는 함수
+// 가상 메모리 페이지 할당 + 초기화 방법과 함께 ==> 준비만!!!!!!
 bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 									vm_initializer *init, void *aux)
 {
-
 	ASSERT(VM_TYPE(type) != VM_UNINIT)
 
 	struct supplemental_page_table *spt = &thread_current()->spt;
@@ -56,7 +56,7 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 	if (spt_find_page(spt, upage) != NULL)
 		return false;
 
-	// 2. struct page
+	// 2. page 생성
 	struct page *page = malloc(sizeof(struct page));
 	if (page == NULL)
 		return false;
@@ -315,15 +315,89 @@ static void remove_page_from_spt(struct hash_elem *elem, void *aux UNUSED)
 	vm_dealloc_page(curr_page);
 }
 
-// spt의 해당 page를 다른 spt로 복사합니다
+// fork시 부모 프로세스의 spt에서 자식 프로세스의 spt로 한 개의 페이지를 복사한다
+/* _do_fork (process.c:183)
+  └─> supplemental_page_table_copy (vm.c:261)
+	  └─> hash_apply(..., copy_page_from_spt) (vm.c:274)
+		  └─> copy_page_from_spt (각 페이지마다 호출) */
+// @param elem: 부모 SPT의 한 페이지를 가리키는 hash element
+// @param aux: 자식의 SPT
 static void copy_page_from_spt(struct hash_elem *elem, void *aux)
 {
-	// TODO 구조 수정
+	// 1. 부모 페이지 가져온다
+	struct page *page = hash_entry(elem, struct page, spt_hash_elem);
+
+	// 2. 자식 SPT 가져온다
 	struct supplemental_page_table *dst_spt = aux;
 
-	struct page *src_page = hash_entry(elem, struct page, spt_hash_elem);
-	struct page *dst_page = malloc(sizeof(struct page));
-	memcpy(dst_page, src_page, sizeof(struct page));
+	// 3. 부모 페이지에서 기본 정보 추출 (프레임은 lazy loading으로 자식이 자체 할당)
 
-	hash_insert(&dst_spt->spt_hash, dst_page);
+	// 3.1. 공통
+	void *va = page->va;
+	bool writable = page->writable;
+
+	// 부모 페이지를 읽을때 크래쉬 방지위해 타입별로 분기
+	if (page->operations->type == VM_UNINIT) {
+		vm_initializer *init = page->uninit.init;
+		enum vm_type type = page_get_type(page); // to-be type
+		void *src_aux = page->uninit.aux;		 // load 함수 실행 할 때 필요한 정보
+
+		// 4. aux 복사한다 (file이면 Deep copy)
+		void *aux_copy = NULL;
+		if (VM_TYPE(type) == VM_FILE) {
+			struct file_page *dst_aux = malloc(sizeof(struct file_page));
+			*dst_aux = *(struct file_page *)src_aux;
+			aux_copy = dst_aux;
+		}
+
+		// 6. 자식 SPT에 새 페이지 생성한다
+		if (!vm_alloc_page_with_initializer(type, va, writable, init, aux_copy)) {
+			if (aux_copy != NULL)
+				free(aux_copy);
+			return;
+		}
+
+	} else if (page->operations->type == VM_FILE) {
+		// 1. 자식용 file_page 구조체 할당 (deep copy)
+		struct file_page *aux_copy = malloc(sizeof(struct file_page));
+		// 2. 부모의 file_page 정보 가져오기
+		struct file_page *src_fp = &page->file;
+		// 3. 구조체 내용 복사
+		*aux_copy = *src_fp;
+		// offset: 값 복사 (deep copy)
+		// page_read_bytes: 값 복사 (deep copy)
+		// file: 포인터 복사 (shallow copy, but OK!)
+		//  → 파일 객체는 커널이 관리하므로 공유해도 안전
+
+		// 4. 자식 SPT에 UNINIT 페이지 생성
+		// init은 NULL (file_backed_swap_in이 알아서 읽음)
+		if (!vm_alloc_page_with_initializer(VM_FILE, va, writable, lazy_load_segment, aux_copy)) {
+			free(aux_copy);
+			return;
+		}
+	} else if (page->operations->type == VM_ANON) { // 메모리에만 있는 데이터
+		// ANON은 init/aux 모두 NULL
+
+		// 1. 자식에 UNINIT 페이지 생성
+		if (!vm_alloc_page(VM_ANON, va, writable)) {
+			return;
+		}
+
+		// 2. 자식 페이지 찾기
+		struct page *child_page = spt_find_page(dst_spt, va);
+		if (child_page == NULL)
+			return;
+
+		// 3. 프레임 즉시 할당
+		if (!vm_do_claim_page(child_page))
+			return;
+
+		// 4. 부모의 물리 메모리 내용 복사
+		if (page->frame != NULL) {
+			memcpy(child_page->frame->kva, page->frame->kva, PGSIZE);
+		} else {
+			// 부모도 물리 메모리가 없으면 0으로 초기화 한다
+			memset(child_page->frame->kva, 0, PGSIZE);
+		}
+	}
 }
