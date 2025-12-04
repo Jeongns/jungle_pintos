@@ -293,7 +293,7 @@ void process_exit(void)
 static void process_cleanup(void)
 {
 	struct thread *curr = thread_current();
-	
+
 	if (curr->current_file) {
 		file_allow_write(curr->current_file);
 		lock_acquire(&file_lock);
@@ -680,10 +680,10 @@ static bool install_page(void *upage, void *kpage, bool writable)
 
 static bool lazy_load_segment(struct page *page, void *aux)
 {
-	struct file_page *file_page_aux = (struct file_page *)aux;
-	struct file *file = file_page_aux->file;
-	off_t ofs = file_page_aux->offset;
-	size_t page_read_bytes = file_page_aux->page_read_bytes;
+	struct vm_load_aux *vm_load_aux = (struct vm_load_aux *)aux;
+	struct file *file = thread_current()->current_file;
+	off_t ofs = vm_load_aux->offset;
+	size_t page_read_bytes = vm_load_aux->page_read_bytes;
 
 	int read_result = file_read_at(file, page->frame->kva, page_read_bytes, ofs);
 	if (read_result != (int)page_read_bytes) {
@@ -725,13 +725,12 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		struct file_page *file_page_aux = malloc(sizeof(*file_page_aux));
-		*file_page_aux = (struct file_page){
-			.file = file,
+		struct vm_load_aux *file_page_aux = malloc(sizeof(*file_page_aux));
+		*file_page_aux = (struct vm_load_aux){
 			.offset = ofs,
 			.page_read_bytes = page_read_bytes,
 		};
-		if (!vm_alloc_page_with_initializer(VM_FILE, upage, writable, lazy_load_segment,
+		if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment,
 											file_page_aux))
 			return false;
 

@@ -1,6 +1,7 @@
 #ifndef VM_UNINIT_H
 #define VM_UNINIT_H
 #include "vm/vm.h"
+#include "filesys/off_t.h"
 
 struct page;
 enum vm_type;
@@ -16,6 +17,11 @@ struct uninit_page {
 	void *aux;
 	/* Initiate the struct page and maps the pa to the va */
 	bool (*page_initializer)(struct page *, enum vm_type, void *kva);
+};
+
+struct vm_load_aux {
+	off_t offset;
+	size_t page_read_bytes;
 };
 
 void uninit_new(struct page *page, void *va, vm_initializer *init, enum vm_type type, void *aux,

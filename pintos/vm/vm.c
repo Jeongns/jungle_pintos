@@ -322,12 +322,11 @@ static void copy_page_from_spt(struct hash_elem *elem, void *aux)
 	switch (VM_TYPE(src_page->operations->type)) {
 		case VM_UNINIT:
 			// AUX 값 복사하기
-			enum vm_type type = page_get_type(src_page);
-			size_t aux_size = type == VM_FILE ? sizeof(struct file_page) : sizeof(struct anon_page);
-			void *dst_aux = malloc(aux_size);
-			memcpy(dst_aux, src_page->uninit.aux, aux_size);
+			struct vm_load_aux *dst_aux = malloc(sizeof(*dst_aux));
+			memcpy(dst_aux, src_page->uninit.aux, sizeof(*dst_aux));
 
-			vm_alloc_page_with_initializer(type, va, writable, src_page->uninit.init, dst_aux);
+			vm_alloc_page_with_initializer(page_get_type(src_page), va, writable,
+										   src_page->uninit.init, dst_aux);
 			return;
 		case VM_FILE:
 			vm_alloc_page_with_initializer(VM_FILE, va, writable, NULL, &src_page->file);
