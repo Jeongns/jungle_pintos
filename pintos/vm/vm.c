@@ -323,7 +323,7 @@ static void copy_page_from_spt(struct hash_elem *elem, void *aux)
 		case VM_UNINIT:
 			// AUX 값 복사하기
 			enum vm_type type = page_get_type(src_page);
-			size_t aux_size = type == VM_FILE ? sizeof(struct file_page) : sizeof(struct anon_page);
+			size_t aux_size = sizeof(struct vm_load_aux);
 			void *dst_aux = malloc(aux_size);
 			memcpy(dst_aux, src_page->uninit.aux, aux_size);
 

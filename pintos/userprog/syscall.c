@@ -34,6 +34,8 @@ void syscall_handler(struct intr_frame *);
 #define MSR_LSTAR 0xc0000082		/* Long mode SYSCALL target */
 #define MSR_SYSCALL_MASK 0xc0000084 /* Mask for the eflags */
 
+#define MAX_FILE_NAME_LEN 16
+
 struct lock file_lock;
 
 static void syscall_halt(void);
@@ -130,21 +132,21 @@ static void syscall_exit(int status)
 
 static pid_t syscall_fork(const char *thread_name, struct intr_frame *if_)
 {
-	if (thread_name == NULL || !valid_address(thread_name, false))
-		syscall_exit(-1);
-	return process_fork(thread_name, if_);
+	char *kernel_thread_name[MAX_FILE_NAME_LEN];
+	if (!copy_user_string(kernel_thread_name, thread_name, MAX_FILE_NAME_LEN))
+		return TID_ERROR;
+
+	return process_fork(kernel_thread_name, if_);
 }
 
 static int syscall_exec(const char *cmd_line)
 {
-	if (cmd_line == NULL || !valid_address(cmd_line, false))
-		syscall_exit(-1);
-	char *copy_cmd_line = palloc_get_page(0);
-	if (copy_cmd_line == NULL)
-		syscall_exit(-1);
-	strlcpy(copy_cmd_line, cmd_line, PGSIZE); // 반드시 유효 메모리 확보
+	char *kernel_cmd_line = palloc_get_page(0);
 
-	process_exec(copy_cmd_line);
+	if (!copy_user_string(kernel_cmd_line, cmd_line, PGSIZE))
+		syscall_exit(-1);
+
+	process_exec(kernel_cmd_line);
 	syscall_exit(-1);
 }
 
@@ -155,11 +157,13 @@ static int syscall_wait(int pid)
 
 static bool syscall_create(const char *file, unsigned initial_size)
 {
-	if (!valid_address(file, false))
-		syscall_exit(-1);
+	char *kernel_file_name[MAX_FILE_NAME_LEN];
+
+	if (!copy_user_string(kernel_file_name, file, MAX_FILE_NAME_LEN))
+		return false;
 
 	lock_acquire(&file_lock);
-	bool success = filesys_create(file, initial_size);
+	bool success = filesys_create(kernel_file_name, initial_size);
 	lock_release(&file_lock);
 
 	return success;
@@ -167,11 +171,13 @@ static bool syscall_create(const char *file, unsigned initial_size)
 
 static bool syscall_remove(const char *file)
 {
-	if (!valid_address(file, false))
-		syscall_exit(-1);
+	char *kernel_file_name[MAX_FILE_NAME_LEN];
+
+	if (!copy_user_string(kernel_file_name, file, MAX_FILE_NAME_LEN))
+		return false;
 
 	lock_acquire(&file_lock);
-	bool success = filesys_remove(file);
+	bool success = filesys_remove(kernel_file_name);
 	lock_release(&file_lock);
 
 	return success;
@@ -179,11 +185,13 @@ static bool syscall_remove(const char *file)
 
 static int syscall_open(const char *file)
 {
-	if (!valid_address(file, false))
-		syscall_exit(-1);
+	char *kernel_file_name[MAX_FILE_NAME_LEN];
+
+	if (!copy_user_string(kernel_file_name, file, MAX_FILE_NAME_LEN))
+		return -1;
 
 	lock_acquire(&file_lock);
-	struct file *open_file = filesys_open(file);
+	struct file *open_file = filesys_open(kernel_file_name);
 	lock_release(&file_lock);
 
 	if (open_file == NULL)
@@ -212,49 +220,64 @@ static int syscall_filesize(int fd)
 
 static int syscall_read(int fd, void *buffer, unsigned size)
 {
-	int result;
 	if (size == 0)
 		return 0;
-	if (!valid_address(buffer, true))
-		syscall_exit(-1);
+
+	int result;
+	char *kernel_buffer = malloc(size);
 
 	struct file *file = get_file(thread_current()->fd_table, fd);
-	if (file == NULL || file == stdout_entry)
+	if (file == NULL || file == stdout_entry) {
+		free(kernel_buffer);
 		return -1;
+	}
 
 	lock_acquire(&file_lock);
 	if (file == stdin_entry) {
 		for (int i = 0; i < size; i++)
-			((char *)buffer)[i] = input_getc();
+			kernel_buffer[i] = input_getc();
 		result = size;
 	} else {
-		result = file_read(file, buffer, size);
+		result = file_read(file, kernel_buffer, size);
 	}
 	lock_release(&file_lock);
 
+	if (!buffer_copy_to_user(buffer, kernel_buffer, result))
+		syscall_exit(-1);
+
+	free(kernel_buffer);
 	return result;
 }
 
 static int syscall_write(int fd, const void *buffer, unsigned size)
 {
+	if (size == 0)
+		return 0;
+
 	int result;
-	if (!valid_address(buffer, false))
-		syscall_exit(-1);
+	char *kernel_buffer = malloc(size);
+	if (!copy_user_buffer(kernel_buffer, buffer, size)) {
+		free(kernel_buffer);
+		return -1;
+	}
 
 	struct file *file = get_file(thread_current()->fd_table, fd);
 
-	if (file == NULL || file == stdin_entry)
+	if (file == NULL || file == stdin_entry) {
+		free(kernel_buffer);
 		return -1;
+	}
 
 	lock_acquire(&file_lock);
 	if (file == stdout_entry) {
-		putbuf(buffer, size);
+		putbuf(kernel_buffer, size);
 		result = size;
 	} else {
-		result = file_write(file, buffer, size);
+		result = file_write(file, kernel_buffer, size);
 	}
 	lock_release(&file_lock);
 
+	free(kernel_buffer);
 	return result;
 }
 

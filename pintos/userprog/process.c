@@ -177,6 +177,9 @@ static void __do_fork(void *aux)
 	if (current->pml4 == NULL)
 		goto error;
 
+	if (parent->current_file)
+		current->current_file = file_duplicate(parent->current_file);
+
 	process_activate(current);
 #ifdef VM
 	supplemental_page_table_init(&current->spt);
@@ -281,14 +284,6 @@ void process_exit(void)
 	if (curr->pml4 != NULL)
 		printf("%s: exit(%d)\n", curr->name, curr->my_entry->exit_status);
 
-	if (curr->current_file) {
-		file_allow_write(curr->current_file);
-		lock_acquire(&file_lock);
-		file_close(curr->current_file);
-		lock_release(&file_lock);
-		curr->current_file = NULL;
-	}
-
 	fd_clean(curr);
 	process_cleanup();
 	sema_up(&curr->my_entry->wait_sema);
@@ -298,6 +293,15 @@ void process_exit(void)
 static void process_cleanup(void)
 {
 	struct thread *curr = thread_current();
+
+	if (curr->current_file) {
+		file_allow_write(curr->current_file);
+		lock_acquire(&file_lock);
+		file_close(curr->current_file);
+		lock_release(&file_lock);
+		curr->current_file = NULL;
+	}
+
 #ifdef VM
 	supplemental_page_table_kill(&curr->spt);
 #endif
@@ -677,12 +681,14 @@ static bool install_page(void *upage, void *kpage, bool writable)
 
 static bool lazy_load_segment(struct page *page, void *aux)
 {
-	struct file_page *file_page_aux = (struct file_page *)aux;
-	struct file *file = file_page_aux->file;
-	off_t ofs = file_page_aux->offset;
-	size_t page_read_bytes = file_page_aux->page_read_bytes;
+	struct vm_load_aux *vm_load_aux = (struct vm_load_aux *)aux;
+	struct file *file = thread_current()->current_file;
+	off_t ofs = vm_load_aux->offset;
+	size_t page_read_bytes = vm_load_aux->page_read_bytes;
 
+	lock_acquire(&file_lock);
 	int read_result = file_read_at(file, page->frame->kva, page_read_bytes, ofs);
+	lock_release(&file_lock);
 	if (read_result != (int)page_read_bytes) {
 		palloc_free_page(page->frame->kva);
 		return false;
@@ -694,20 +700,6 @@ static bool lazy_load_segment(struct page *page, void *aux)
 	return true;
 }
 
-/* Loads a segment starting at offset OFS in FILE at address
- * UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
- * memory are initialized, as follows:
- *
- * - READ_BYTES bytes at UPAGE must be read from FILE
- * starting at offset OFS.
- *
- * - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
- *
- * The pages initialized by this function must be writable by the
- * user process if WRITABLE is true, read-only otherwise.
- *
- * Return true if successful, false if a memory allocation error
- * or disk read error occurs. */
 static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t read_bytes,
 						 uint32_t zero_bytes, bool writable)
 {
@@ -716,22 +708,20 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 	ASSERT(ofs % PGSIZE == 0);
 
 	while (read_bytes > 0 || zero_bytes > 0) {
-		/* Do calculate how to fill this page.
-		 * We will read PAGE_READ_BYTES bytes from FILE
-		 * and zero the final PAGE_ZERO_BYTES bytes. */
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		struct file_page *file_page_aux = malloc(sizeof(*file_page_aux));
-		*file_page_aux = (struct file_page){
-			.file = file,
+		struct vm_load_aux *file_page_aux = malloc(sizeof(*file_page_aux));
+		*file_page_aux = (struct vm_load_aux){
 			.offset = ofs,
 			.page_read_bytes = page_read_bytes,
 		};
-		if (!vm_alloc_page_with_initializer(VM_FILE, upage, writable, lazy_load_segment,
+		
+		// 파일은 mmap, stack은 anon, 실행파일도 anon!!! write back 기준으로!
+		if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment,
 											file_page_aux))
 			return false;
-
+			
 		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
