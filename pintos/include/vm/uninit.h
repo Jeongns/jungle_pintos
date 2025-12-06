@@ -19,6 +19,7 @@ struct uninit_page {
 };
 
 struct vm_load_aux {
+	struct file* file;
 	uint64_t offset;		  // 파일 객체의 오프셋 값
 	uint32_t page_read_bytes; // 페이지에서 읽어야 하는 바이트의 개수
 };
