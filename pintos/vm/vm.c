@@ -166,8 +166,12 @@ static struct frame *vm_get_frame(void)
 }
 
 /* Growing the stack. */
-static void vm_stack_growth(void *addr UNUSED)
+static void vm_stack_growth(void *addr)
 {
+	if (!vm_alloc_page(VM_ANON | VM_STACK_MAKER, pg_round_down(addr), true))
+		PANIC("(vm_stack_growth) vm_alloc_page FAIL!");
+	if (!vm_claim_page(pg_round_down(addr)))
+		PANIC("(vm_stack_growth) vm_claim_page FAIL!");
 }
 
 /* Handle the fault on write_protected page */
@@ -187,8 +191,16 @@ bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write
 	// 2. spt에 있는지 찾기
 	struct page *page = spt_find_page(spt, addr);
 	if (page == NULL) {
-		// TODO: grow stack 구현하기
-		return false;
+		uintptr_t user_stack = user ? f->rsp : thread_current()->user_rsp;
+
+		if (addr > USER_STACK || addr < USER_STACK - (1 << 20))
+			return false;
+		if (user_stack - 8 > addr)
+			return false;
+
+		vm_stack_growth(addr);
+		
+		return true;
 	}
 
 	// 3. write 시도라면 권한 검사

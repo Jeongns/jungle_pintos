@@ -107,6 +107,7 @@ struct thread {
 	int nice;
 	fixed_t recent_cpu;
 
+	uintptr_t user_rsp;
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4; /* Page map level 4 */
