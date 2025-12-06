@@ -6,6 +6,11 @@
    new page tables immediately.  See [IA32-v2a] "MOV--Move
    to/from Control Registers" and [IA32-v3a] 3.7.5 "Base Address
    of the Page Directory". */
+__attribute__((always_inline)) static __inline void lcr0(uint64_t val)
+{
+	__asm __volatile("movq %0, %%cr0" : : "r"(val));
+}
+
 __attribute__((always_inline)) static __inline void lcr3(uint64_t val)
 {
 	__asm __volatile("movq %0, %%cr3" : : "r"(val));
@@ -41,6 +46,13 @@ __attribute__((always_inline)) static __inline uint64_t read_eflags(void)
 	uint64_t rflags;
 	__asm __volatile("pushfq; popq %0" : "=r"(rflags));
 	return rflags;
+}
+
+__attribute__((always_inline)) static __inline uint64_t rcr0(void)
+{
+	uint64_t val;
+	__asm __volatile("movq %%cr0, %0" : "=r"(val));
+	return val;
 }
 
 __attribute__((always_inline)) static __inline uint64_t rcr3(void)

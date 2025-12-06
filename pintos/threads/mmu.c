@@ -195,6 +195,14 @@ void pml4_destroy(uint64_t *pml4)
 	palloc_free_page((void *)pml4);
 }
 
+/* CR0의 WP (16번째 비트)를 켜서, 커널 접근도 쓰기 보호가 가능하도록 설정한다. */
+void WP_activate(void)
+{
+	uint64_t cr0 = rcr0();
+	cr0 |= 0x10000;
+	lcr0(cr0);
+}
+
 /* Loads page directory PD into the CPU's page directory base
  * register. */
 void pml4_activate(uint64_t *pml4)

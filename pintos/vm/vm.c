@@ -166,8 +166,16 @@ static struct frame *vm_get_frame(void)
 }
 
 /* Growing the stack. */
-static void vm_stack_growth(void *addr UNUSED)
+static void vm_stack_growth(void *addr)
 {
+	if (addr == NULL)
+		return;
+
+	void *page_addr = pg_round_down(addr);
+	if (page_addr < USER_STACK - (1 << 20))
+		return;
+
+	vm_alloc_page(VM_ANON, page_addr, true);
 }
 
 /* Handle the fault on write_protected page */
@@ -187,9 +195,27 @@ bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write
 	// 2. spt에 있는지 찾기
 	struct page *page = spt_find_page(spt, addr);
 	if (page == NULL) {
-		// TODO: grow stack 구현하기
-		return false;
+		/*
+		STACK 요청인지, 없는 페이지인지 구분
+		STACK 요청이다 -> fault난 주소가 rsp 근처
+		아니다 -> fault난 주소가 이상한 곳
+		*/
+
+		uint64_t rsp = user ? f->rsp : thread_current()->user_rsp;
+
+		if (addr < rsp - 8 || addr < USER_STACK - (1 << 20))
+			/* 스택 성장 아님, fault난 주소가 이상한 곳 */
+			return false;
+
+		vm_stack_growth(addr);
+		page = spt_find_page(spt, addr);
+		if (page == NULL)
+			PANIC("(try_handle_fault): stack_growth fail?");
 	}
+
+	// printf("DEBUG: Fault Addr: %p\n", addr);
+	// printf("DEBUG: Attempt (Action): %s\n", write ? "WRITE" : "READ");
+	// printf("DEBUG: Real Permission: %s\n", page->writable ? "RW" : "R-Only");
 
 	// 3. write 시도라면 권한 검사
 	if (!page->writable && write)

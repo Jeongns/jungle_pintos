@@ -115,12 +115,13 @@ struct thread {
 	struct child_info *my_entry;
 
 	struct fd_table *fd_table;
-
 	struct file *current_file;
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
+	uint64_t user_rsp;
+
 #endif
 
 	/* Owned by thread.c. */
