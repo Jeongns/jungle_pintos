@@ -365,4 +365,20 @@ static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t
 
 static void syscall_munmap(void *addr)
 {
+	struct page *mmap_page = spt_find_page(&thread_current()->spt, addr);
+	if (mmap_page == NULL || page_get_type(mmap_page) != VM_FILE)
+		return;
+		
+	int length;
+	if (VM_TYPE(mmap_page->operations->type) == VM_FILE) {
+		length = mmap_page->file.length;
+	} else {
+		struct mmap_aux *mmap_aux = mmap_page->uninit.aux;
+		length = mmap_aux->length;
+	}
+
+	for (size_t i = 0; i < length; i++) {
+		struct page *page = spt_find_page(&thread_current()->spt, addr + (PGSIZE * i));
+		spt_remove_page(&thread_current()->spt, page);
+	}
 }

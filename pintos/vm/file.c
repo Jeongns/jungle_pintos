@@ -39,6 +39,8 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 		.offset = aux->offset,
 		.file = aux->file,
 		.page_read_bytes = aux->page_read_bytes,
+		.index = aux->index,
+		.length = aux->length,
 	};
 
 	return true;
