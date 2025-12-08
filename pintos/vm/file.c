@@ -11,7 +11,7 @@ extern struct lock file_lock; // syscall.c 것을 사용
 static bool file_backed_swap_in(struct page *page, void *kva);
 static bool file_backed_swap_out(struct page *page);
 static void file_backed_destroy(struct page *page);
-static bool lazy_load_mmap(struct page *page, void *aux);
+// static bool lazy_load_mmap(struct page *page, void *aux);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -29,7 +29,10 @@ void vm_file_init(void)
 // VM타입 변경 및 file_page 구조체 값 넣기
 bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 {
-	if (page == NULL || kva == NULL || type != VM_FILE)
+	// printf("[DEBUG INIT] file_backed_initializer called: page=%p, type=%d, kva=%p\n", page, type,
+	//  kva);
+
+	if (page == NULL || type != VM_FILE)
 		return false;
 
 	// 1. VM_FILE에 맞게 operations 변경
@@ -37,6 +40,13 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 
 	// 2. file_page 구조체 초기화
 	struct file_page *aux = page->uninit.aux;
+	// printf("[DEBUG INIT] aux=%p\n", aux);
+	if (aux == NULL) {
+		// printf("[DEBUG INIT] ERROR: aux is NULL!\n");
+		return false;
+	}
+	// printf("[DEBUG INIT] aux->file=%p, aux->offset=%ld, aux->page_read_bytes=%u\n", aux->file,
+	//  aux->offset, aux->page_read_bytes);
 	struct file_page *file_page = &page->file;
 
 	*file_page = (struct file_page){
@@ -46,6 +56,7 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 	};
 
 	page->file = *file_page;
+	//  printf("[DEBUG INIT] Success: page->file.file=%p\n", page->file.file);
 
 	return true;
 }
@@ -59,10 +70,17 @@ static bool file_backed_swap_in(struct page *page, void *kva)
 	size_t page_read_bytes = file_page->page_read_bytes;
 
 	// 파일에서 데이터 읽기
+	// printf("[DEBUG SWAP_IN] Acquiring file_lock...\n");
 	lock_acquire(&file_lock);
+	// printf("[DEBUG SWAP_IN] Calling file_read_at(file=%p, kva=%p, size=%zu, offset=%ld)...\n",
+	// file,
+	//  kva, page_read_bytes, offset);
 	int read_result = file_read_at(file, kva, page_read_bytes, offset);
+	// printf("[DEBUG SWAP_IN] file_read_at returned %d\n", read_result);
 	lock_release(&file_lock);
 	if (read_result != (int)page_read_bytes) {
+		// printf("[DEBUG SWAP_IN] ERROR: read_result(%d) != page_read_bytes(%zu)\n", read_result,
+		//  page_read_bytes);
 		return false;
 	}
 
@@ -78,6 +96,7 @@ static bool file_backed_swap_in(struct page *page, void *kva)
 static bool file_backed_swap_out(struct page *page)
 {
 	struct file_page *file_page UNUSED = &page->file;
+	return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
@@ -106,17 +125,30 @@ static void file_backed_destroy(struct page *page)
 // 디스크로 다시 쓸 때는 버린다
 // 매핑에 성공하면 파일이 매핑된 시작 가상 주소를 반환하고,
 // 실패하면 매핑에 사용할 수 없는 주소 값인 NULL을 반환해야 한다
+// read,write 시스템콜 말고 메모리 접근만으로 파일 내용을 읽고 쓸 수 있다
+// 사용자 프로그램: mmap(0x10000000, 128KB, writable, fd, 0)
 void *do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset)
 {
+	// printf("[DEBUG] do_mmap called: addr=%p, length=%zu, offset=%d\n", addr, length, offset);
+
 	off_t file_len = file_length(file);
-	if (file_len == 0 || file_len <= offset || length == 0)
+	// printf("[DEBUG] file_length=%d\n", file_len);
+	if (file_len == 0 || file_len <= offset || length == 0) {
+		// printf("[DEBUG] FAIL: invalid params (file_len=%d, offset=%d, length=%zu)\n", file_len,
+		//  offset, length);
+		return NULL;
+	}
+
+	void *start_addr = pg_round_down(addr);
+	if (NULL == start_addr || is_kernel_vaddr(start_addr))
 		return NULL;
 
-	if (NULL == addr || is_kernel_vaddr(addr))
+	// 파일 reopen: 독립적인 file 구조체 생성
+	file = file_reopen(file);
+	if (NULL == file)
 		return NULL;
 
 	// 사용하려는 주소가 다 비어있는지 체크
-	void *start_addr = pg_round_down(addr);
 	void *end_addr = pg_round_up(addr + length);
 	size_t total_bytes = (uint64_t)end_addr - (uint64_t)start_addr;
 	size_t page_count = total_bytes / PGSIZE;
@@ -131,6 +163,7 @@ void *do_mmap(void *addr, size_t length, int writable, struct file *file, off_t 
 			return NULL;
 	}
 
+	// 메모리 영역을 페이지 단위로 나눠서 spt에 등록한다
 	for (size_t i = 0; i < page_count; i++) {
 		void *page_addr = start_addr + (i * PGSIZE);
 		size_t remaining = length - (i * PGSIZE);
@@ -147,10 +180,10 @@ void *do_mmap(void *addr, size_t length, int writable, struct file *file, off_t 
 			.page_read_bytes = page_read_bytes //
 		};
 
-		if (!vm_alloc_page_with_initializer(VM_FILE, page_addr, writable, file_backed_swap_in,
-											aux)) {
+		if (!vm_alloc_page_with_initializer(VM_FILE, page_addr, writable, NULL, aux)) {
 			free(aux);
 			aux = NULL;
+			do_munmap(start_addr);
 			return NULL;
 		};
 	}

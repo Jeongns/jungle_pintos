@@ -138,14 +138,25 @@ static void page_fault(struct intr_frame *f)
 
 #ifdef VM
 	/* For project 3 and later. */
-	if (vm_try_handle_fault(f, fault_addr, user, write, not_present))
+	if (vm_try_handle_fault(f, fault_addr, user, write, not_present)) {
 		return;
+	}
 #endif
 
-	if (!user) {
-		f->rip = f->R.rax;
-		f->R.rax = -1;
-		return;
+	// get_user/put_user를 위한 예외 처리
+	// 조건: 커널 모드 && not_present && 페이지가 SPT에 없음
+	// write protection violation은 여기서 복구하면 안됨!
+	if (!user && not_present) {
+		struct supplemental_page_table *spt = &thread_current()->spt;
+		struct page *page = spt_find_page(spt, fault_addr);
+
+		// 페이지가 SPT에 없는 경우만 복구 (invalid address)
+		// 페이지가 SPT에 있다면 = writable 문제이므로 복구 불가
+		if (page == NULL) {
+			f->rip = f->R.rax;
+			f->R.rax = -1;
+			return;
+		}
 	}
 
 	/* Count page faults. */

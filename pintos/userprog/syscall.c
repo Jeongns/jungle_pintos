@@ -337,12 +337,12 @@ static int syscall_dup2(int oldfd, int newfd)
 
 static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t offset)
 {
-	//콘솔 체크
-	if (fd == 0 || fd == 1 || fd == 2)
-		return NULL;
-
 	struct file *file = get_file(thread_current()->fd_table, fd);
-	if (NULL == file)
+	if (NULL == file) {
+		return NULL;
+	}
+
+	if (file == stdin_entry || file == stdout_entry)
 		return NULL;
 
 	return do_mmap(addr, length, writable, file, offset);
