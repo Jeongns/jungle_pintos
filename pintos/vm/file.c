@@ -1,6 +1,7 @@
 /* file.c: Implementation of memory backed file object (mmaped object). */
 
 #include "vm/vm.h"
+#include "threads/vaddr.h"
 
 static bool file_backed_swap_in(struct page *page, void *kva);
 static bool file_backed_swap_out(struct page *page);
@@ -29,13 +30,14 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 	page->operations = &file_ops;
 
 	// 2. file_page 구조체 초기화
-	struct file_page *aux = page->uninit.aux;
+	struct mmap_aux *aux = page->uninit.aux;
 	struct file_page *file_page = &page->file;
 
 	*file_page = (struct file_page){
-		.offset = aux->offset,
 		.file = aux->file,
-		.page_read_bytes = aux->page_read_bytes,
+		.offset = aux->offset,
+		.index = aux->index,
+		.length = aux->length,
 	};
 
 	return true;
@@ -58,6 +60,9 @@ static void file_backed_destroy(struct page *page)
 {
 	struct file_page *file_page UNUSED = &page->file;
 
+	if (file_page->file)
+		file_close(file_page->file);
+
 	if (page->frame != NULL) {
 		// pte에서 매핑 제거
 		pml4_clear_page(thread_current()->pml4, page->va);
@@ -79,4 +84,18 @@ void *do_mmap(void *addr, size_t length, int writable, struct file *file, off_t 
 /* Do the munmap */
 void do_munmap(void *addr)
 {
+}
+
+bool lazy_load_mmap(struct page *page, void *aux)
+{
+	struct vm_load_aux *vm_load_aux = (struct vm_load_aux *)aux;
+	struct file *file = vm_load_aux->file;
+	off_t ofs = vm_load_aux->offset;
+
+	int read_result = file_read_at(file, page->frame->kva, PGSIZE, ofs);
+	memset(page->frame->kva + read_result, 0, PGSIZE - read_result);
+	page->file.page_read_bytes = read_result;
+
+	free(aux);
+	return true;
 }

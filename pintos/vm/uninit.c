@@ -58,7 +58,12 @@ static bool uninit_initialize(struct page *page, void *kva)
  * PAGE will be freed by the caller. */
 static void uninit_destroy(struct page *page)
 {
-	struct uninit_page *uninit UNUSED = &page->uninit;
+	struct uninit_page *uninit = &page->uninit;
+
+	if (page_get_type(page) == VM_FILE) {
+		struct mmap_aux *mmap_aux = uninit->aux;
+		file_close(mmap_aux->file);
+	}
 
 	free(uninit->aux);
 	uninit->aux = NULL;

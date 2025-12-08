@@ -53,6 +53,8 @@ static void syscall_seek(int fd, unsigned position);
 static unsigned syscall_tell(int fd);
 static void syscall_close(int fd);
 static int syscall_dup2(int oldfd, int newfd);
+static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t offset);
+static void syscall_munmap(void *addr);
 
 void syscall_init(void)
 {
@@ -122,6 +124,12 @@ void syscall_handler(struct intr_frame *f)
 			break;
 		case SYS_DUP2:
 			f->R.rax = syscall_dup2(arg1, arg2);
+			break;
+		case SYS_MMAP:
+			f->R.rax = syscall_mmap(arg1, arg2, arg3, arg4, arg5);
+			break;
+		case SYS_MUNMAP:
+			syscall_munmap(arg1);
 			break;
 	}
 }
@@ -325,4 +333,65 @@ static int syscall_dup2(int oldfd, int newfd)
 	int result = fd_dup2(thread_current()->fd_table, oldfd, newfd);
 	lock_release(&file_lock);
 	return result;
+}
+
+static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t offset)
+{
+	if (addr == NULL || addr != pg_round_down(addr) || length <= 0 || fd < 0 || offset < 0)
+		return NULL;
+
+	for (size_t i = 0; i < length; i += PGSIZE) {
+		if (spt_find_page(&thread_current()->spt, addr + i) != NULL)
+			return NULL;
+	}
+
+	struct file *file = get_file(thread_current()->fd_table, fd);
+	if (file_length(file) == 0)
+		return NULL;
+
+	for (size_t i = 0; i < (length + PGSIZE - 1) / PGSIZE; i++) {
+		struct mmap_aux *mmap_aux = malloc(sizeof(*mmap_aux));
+		*mmap_aux = (struct mmap_aux){
+			.file = file_reopen(file),
+			.offset = offset,
+			.index = i,
+			.length = (length + PGSIZE - 1) / PGSIZE,
+		};
+
+		if (!vm_alloc_page_with_initializer(VM_FILE, addr + (PGSIZE * i), writable, lazy_load_mmap,
+											mmap_aux)) {
+			free(mmap_aux);
+			goto rollback;
+		}
+	}
+
+	return addr;
+
+rollback:
+	for (size_t j = 0; j < length; j += PGSIZE) {
+		struct page *rollback_page = spt_find_page(&thread_current()->spt, addr + j);
+		if (rollback_page != NULL)
+			destroy(rollback_page);
+	}
+	return NULL;
+}
+
+static void syscall_munmap(void *addr)
+{
+	struct page *mmap_page = spt_find_page(&thread_current()->spt, addr);
+	if (mmap_page == NULL || page_get_type(mmap_page) != VM_FILE)
+		return;
+
+	int length;
+	if (VM_TYPE(mmap_page->operations->type) == VM_FILE) {
+		length = mmap_page->file.length;
+	} else {
+		struct mmap_aux *mmap_aux = mmap_page->uninit.aux;
+		length = mmap_aux->length;
+	}
+
+	for (size_t i = 0; i < length; i++) {
+		struct page *page = spt_find_page(&thread_current()->spt, addr + (PGSIZE * i));
+		spt_remove_page(&thread_current()->spt, page);
+	}
 }
