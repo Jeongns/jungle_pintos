@@ -34,6 +34,8 @@ enum vm_type {
 
 struct page_operations;
 struct thread;
+extern struct frame_table *frame_table;
+extern struct lock frame_table_lock;
 
 #define VM_TYPE(type) ((type)&7)
 
@@ -49,7 +51,7 @@ struct page {
 	/* Your implementation */
 	struct hash_elem spt_hash_elem;
 	bool writable;
-	struct page *next_page; /* mmap으로 할당하는 경우, 다음 페이지를 가리키는 포인터 */
+	struct thread *owner_thread;
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -67,6 +69,9 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
+
+	/* Your implementation */
+	struct hash_elem ft_hash_elem;
 };
 
 /* The function table for page operations.
@@ -93,12 +98,17 @@ struct supplemental_page_table {
 	struct hash spt_hash;
 };
 
+struct frame_table {
+	struct hash ft_hash;
+};
+
 #include "threads/thread.h"
 void supplemental_page_table_init(struct supplemental_page_table *spt);
 bool supplemental_page_table_copy(struct supplemental_page_table *dst,
 								  struct supplemental_page_table *src,
 								  struct file *executable_file);
 void supplemental_page_table_kill(struct supplemental_page_table *spt);
+
 struct page *spt_find_page(struct supplemental_page_table *spt, void *va);
 bool spt_insert_page(struct supplemental_page_table *spt, struct page *page);
 void spt_remove_page(struct supplemental_page_table *spt, struct page *page);

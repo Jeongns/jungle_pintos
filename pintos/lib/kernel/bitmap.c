@@ -208,7 +208,10 @@ void bitmap_set_multiple(struct bitmap *b, size_t start, size_t cnt, bool value)
 }
 
 /* Returns the number of bits in B between START and START + CNT,
-   exclusive, that are set to VALUE. */
+   exclusive, that are set to VALUE.
+
+   지정된 범위(start ~ start+cnt) 안에서 값이 value인 비트가 몇 개인지 센다.
+*/
 size_t bitmap_count(const struct bitmap *b, size_t start, size_t cnt, bool value)
 {
 	size_t i, value_cnt;
@@ -225,7 +228,10 @@ size_t bitmap_count(const struct bitmap *b, size_t start, size_t cnt, bool value
 }
 
 /* Returns true if any bits in B between START and START + CNT,
-   exclusive, are set to VALUE, and false otherwise. */
+   exclusive, are set to VALUE, and false otherwise.
+
+   지정된 범위 안에 value 값을 가진 비트가 하나라도 있는지 확인합니다.
+*/
 bool bitmap_contains(const struct bitmap *b, size_t start, size_t cnt, bool value)
 {
 	size_t i;
@@ -241,21 +247,30 @@ bool bitmap_contains(const struct bitmap *b, size_t start, size_t cnt, bool valu
 }
 
 /* Returns true if any bits in B between START and START + CNT,
-   exclusive, are set to true, and false otherwise.*/
+   exclusive, are set to true, and false otherwise.
+
+   범위 안에 true (1)인 비트가 하나라도 있으면 true를 반환합니다.
+*/
 bool bitmap_any(const struct bitmap *b, size_t start, size_t cnt)
 {
 	return bitmap_contains(b, start, cnt, true);
 }
 
 /* Returns true if no bits in B between START and START + CNT,
-   exclusive, are set to true, and false otherwise.*/
+   exclusive, are set to true, and false otherwise.
+
+   범위 안의 비트가 모두 false (0)이면 true를 반환합니다. (true인 게 하나도 없다)
+*/
 bool bitmap_none(const struct bitmap *b, size_t start, size_t cnt)
 {
 	return !bitmap_contains(b, start, cnt, true);
 }
 
 /* Returns true if every bit in B between START and START + CNT,
-   exclusive, is set to true, and false otherwise. */
+   exclusive, is set to true, and false otherwise.
+
+   범위 안의 비트가 모두 true (1)이면 true를 반환합니다.
+*/
 bool bitmap_all(const struct bitmap *b, size_t start, size_t cnt)
 {
 	return !bitmap_contains(b, start, cnt, false);
@@ -266,7 +281,10 @@ bool bitmap_all(const struct bitmap *b, size_t start, size_t cnt)
 /* Finds and returns the starting index of the first group of CNT
    consecutive bits in B at or after START that are all set to
    VALUE.
-   If there is no such group, returns BITMAP_ERROR. */
+   If there is no such group, returns BITMAP_ERROR.
+
+   start 인덱스부터 검색을 시작해서, cnt개 만큼의 연속된 비트가 모두 value인 구간을 찾습니다.
+*/
 size_t bitmap_scan(const struct bitmap *b, size_t start, size_t cnt, bool value)
 {
 	ASSERT(b != NULL);
@@ -288,7 +306,10 @@ size_t bitmap_scan(const struct bitmap *b, size_t start, size_t cnt, bool value)
    If there is no such group, returns BITMAP_ERROR.
    If CNT is zero, returns 0.
    Bits are set atomically, but testing bits is not atomic with
-   setting them. */
+   setting them.
+
+   bitmap_scan과 똑같이 검색한 뒤, 찾았다면 그 구간의 비트 값을 반대로 뒤집어버립니다(Flip).
+*/
 size_t bitmap_scan_and_flip(struct bitmap *b, size_t start, size_t cnt, bool value)
 {
 	size_t idx = bitmap_scan(b, start, cnt, value);

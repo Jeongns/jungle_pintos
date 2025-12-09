@@ -1,11 +1,16 @@
 /* vm.c: Generic interface for virtual memory objects. */
 
 #include "vm/vm.h"
+
+#include <string.h>
 #include "threads/malloc.h"
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "vm/inspect.h"
-#include <string.h>
+#include "lib/random.h"
+
+struct frame_table *frame_table;
+struct lock frame_table_lock;
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -19,6 +24,10 @@ void vm_init(void)
 	register_inspect_intr();
 	/* DO NOT MODIFY UPPER LINES. */
 	/* TODO: Your code goes here. */
+	frame_table = malloc(sizeof(struct frame_table));
+
+	frame_table_init(frame_table);
+	lock_init(&frame_table_lock);
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -40,6 +49,15 @@ static struct frame *vm_get_victim(void);
 static bool vm_do_claim_page(struct page *page);
 static struct frame *vm_evict_frame(void);
 
+/* frame table helpers - 여기부터 frame 관련 함수 */
+static uint64_t ft_hash_func(const struct hash_elem *elem, void *aux UNUSED);
+static bool ft_hash_less_func(const struct hash_elem *elem_a, const struct hash_elem *elem_b,
+							  void *aux UNUSED);
+static void remove_frame_from_ft(struct hash_elem *elem, void *aux UNUSED);
+
+// frame table functions
+bool ft_insert_frame(struct frame_table *ft, struct frame *frame);
+
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
  * `vm_alloc_page`. */
@@ -47,7 +65,6 @@ static struct frame *vm_evict_frame(void);
 bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 									vm_initializer *init, void *aux)
 {
-
 	ASSERT(VM_TYPE(type) != VM_UNINIT)
 
 	struct supplemental_page_table *spt = &thread_current()->spt;
@@ -77,7 +94,7 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 	// page 구조체에 값 넣기
 	uninit_new(page, upage, init, type, aux, initializer);
 	page->writable = writable;
-	page->next_page = NULL;
+	page->owner_thread = thread_current();
 
 	if (!spt_insert_page(spt, page))
 		goto err;
@@ -126,14 +143,44 @@ void spt_remove_page(struct supplemental_page_table *spt, struct page *page)
 		swap_out(page);
 
 	hash_delete(&spt->spt_hash, &page->spt_hash_elem);
+
 	vm_dealloc_page(page);
 }
 
 /* Get the struct frame, that will be evicted. */
 static struct frame *vm_get_victim(void)
 {
-	struct frame *victim = NULL;
 	/* TODO: The policy for eviction is up to you. */
+	/* 일단은 그냥 랜덤으로 아무거나 잡히는 거 삭제하는 걸로 결정 */
+	struct hash_iterator h;
+
+	/* 1. 프레임 테이블의 처음부터 탐색 시작 */
+	lock_acquire(&frame_table_lock);
+	hash_first(&h, &frame_table->ft_hash);
+
+	/* 2. 랜덤한 숫자 값만큼 해시 요소를 건너뜀 */
+	int steps = (random_ulong() % 31) + 1;
+
+	for (int i = 0; i < steps; i++) {
+		if (!hash_next(&h)) {
+			/* 끝에 도달하면 다시 처음으로 */
+			hash_first(&h, &frame_table->ft_hash);
+			hash_next(&h);
+		}
+	}
+
+	/* 3. 랜덤한 iterator를 토대로 elem을 찾음 */
+	struct hash_elem *victim_elem = hash_cur(&h);
+
+	/* 4. 혹시 맨 끝이면, 맨 처음으로 설정 */
+	if (victim_elem == NULL) {
+		hash_first(&h, &frame_table->ft_hash);
+		hash_next(&h);
+		victim_elem = hash_cur(&h);
+	}
+
+	struct frame *victim = hash_entry(victim_elem, struct frame, ft_hash_elem);
+	lock_release(&frame_table_lock);
 
 	return victim;
 }
@@ -142,10 +189,22 @@ static struct frame *vm_get_victim(void)
  * Return NULL on error.*/
 static struct frame *vm_evict_frame(void)
 {
-	struct frame *victim UNUSED = vm_get_victim();
-	/* TODO: swap out the victim and return the evicted frame. */
+	struct supplemental_page_table *spt = &thread_current()->spt;
+	struct frame *victim = vm_get_victim();
+	if (victim == NULL)
+		return NULL;
 
-	return NULL;
+	/* TODO: swap out the victim and return the evicted frame. */
+	struct page *page = victim->page;
+
+	/* 기존 page swap-out 이후 spt에서 삭제 & free */
+	swap_out(page);
+
+	pml4_clear_page(page->owner_thread->pml4, page->va);
+	page->frame = NULL;
+	victim->page = NULL;
+
+	return victim;
 }
 
 /* palloc()으로 프레임을 획득한다. 사용가능한 페이지가 없으면 페이지를 제거한다.
@@ -153,20 +212,37 @@ static struct frame *vm_evict_frame(void)
  * 메모리 공간을 확보하기 위해 프레임을 제거한다. */
 static struct frame *vm_get_frame(void)
 {
-	// frame 구조체를 생성한다
-	struct frame *frame = malloc(sizeof(*frame));
-	if (frame == NULL)
-		PANIC("(vm_get_frame)");
+	struct frame *frame = NULL;
 
-	*frame = (struct frame){
-		.page = NULL,
-		.kva = palloc_get_page(PAL_USER | PAL_ZERO) // 사용자 풀에서 물리 페이지 할당받는다
-	};
+	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
+	if (kva == NULL) {
+		frame = vm_evict_frame(); // 기존 프레임(껍데기)을 가져옴
 
-	if (frame->kva == NULL)
-		PANIC("(vm_get_frame) TODO: swap out 미구현");
+		if (frame == NULL)
+			PANIC("희생자 페이지 찾기 실패");
 
-	ASSERT(frame->page == NULL);
+		frame->page = NULL;
+		return frame;
+	}
+
+	frame = malloc(sizeof(struct frame));
+	if (frame == NULL) {
+		palloc_free_page(kva);
+		PANIC("(vm_get_frame) malloc 실패\n");
+	}
+
+	/* 초기화 */
+	frame->kva = kva;
+	frame->page = NULL; // 아직 주인 없음
+
+	/* 장부에 새로 등록 */
+	lock_acquire(&frame_table_lock);
+	if (!ft_insert_frame(frame_table, frame)) {
+		lock_release(&frame_table_lock);
+		PANIC("ft_insert_frame 실패\n");
+	}
+
+	lock_release(&frame_table_lock);
 	return frame;
 }
 
@@ -275,7 +351,6 @@ static bool vm_do_claim_page(struct page *page)
 }
 
 // spt helpers
-static uint64_t spt_hash_func(const struct hash_elem *elem, void *aux UNUSED);
 static uint64_t spt_hash_func(const struct hash_elem *elem, void *aux UNUSED);
 static bool spt_hash_less_func(const struct hash_elem *elem_a, const struct hash_elem *elem_b,
 							   void *aux UNUSED);
@@ -391,4 +466,54 @@ static void copy_page_from_spt(struct hash_elem *elem, void *aux)
 
 	// 물리 메모리 복사
 	memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+}
+
+// 프레임 테이블을 초기화하는 함수
+void frame_table_init(struct frame_table *frame_table)
+{
+	if (frame_table == NULL)
+		PANIC("(frame_table_init) spt NULL!");
+
+	if (!hash_init(&frame_table->ft_hash, ft_hash_func, ft_hash_less_func, NULL))
+		PANIC("(frame_table_init) hash init FAIL!");
+}
+
+/* Free the resource hold by the supplemental page table */
+void frame_table_kill(struct frame_table *frame_table)
+{
+	if (frame_table == NULL)
+		PANIC("(supplemental_page_table_kill) spt null poiter!");
+
+	lock_acquire(&frame_table_lock);
+	hash_destroy(&frame_table->ft_hash, remove_frame_from_ft);
+	lock_release(&frame_table_lock);
+}
+
+static uint64_t ft_hash_func(const struct hash_elem *elem, void *aux UNUSED)
+{
+	struct frame *curr_frame = hash_entry(elem, struct frame, ft_hash_elem);
+	return hash_bytes(&curr_frame->kva, sizeof(curr_frame->kva));
+}
+
+static bool ft_hash_less_func(const struct hash_elem *elem_a, const struct hash_elem *elem_b,
+							  void *aux UNUSED)
+{
+	struct frame *frame_a = hash_entry(elem_a, struct frame, ft_hash_elem);
+	struct frame *frame_b = hash_entry(elem_b, struct frame, ft_hash_elem);
+
+	return frame_a->kva < frame_b->kva;
+}
+
+static void remove_frame_from_ft(struct hash_elem *elem, void *aux UNUSED)
+{
+	struct frame *curr_frame = hash_entry(elem, struct frame, ft_hash_elem);
+
+	printf("TODO: 모르겠음\n");
+}
+
+bool ft_insert_frame(struct frame_table *ft, struct frame *frame)
+{
+	if (ft == NULL || frame == NULL)
+		return false;
+	return hash_insert(&ft->ft_hash, &frame->ft_hash_elem) == NULL;
 }

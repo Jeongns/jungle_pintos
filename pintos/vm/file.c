@@ -13,8 +13,6 @@ static bool file_backed_swap_out(struct page *page);
 static void file_backed_destroy(struct page *page);
 static bool lazy_load_file(struct page *page, void *aux);
 
-static bool lazy_load_file(struct page *page, void *aux);
-
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
 	.swap_in = file_backed_swap_in,
@@ -45,6 +43,8 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 		.offset = aux->offset,
 		.file = aux->file,
 		.page_read_bytes = aux->page_read_bytes,
+		.index = aux->index,
+		.length = aux->length,
 	};
 
 	return true;
@@ -105,6 +105,10 @@ static void file_backed_destroy(struct page *page)
 	struct file_page *file_page = &page->file;
 
 	if (page->frame != NULL) {
+		lock_acquire(&frame_table_lock);
+		hash_delete(&frame_table->ft_hash, &page->frame->ft_hash_elem);
+		lock_release(&frame_table_lock);
+
 		// pte에서 매핑 제거
 		pml4_clear_page(thread_current()->pml4, page->va);
 
@@ -181,6 +185,7 @@ error:
 		if (rollback_page != NULL)
 			destroy(rollback_page);
 	}
+
 	return NULL;
 }
 
@@ -205,36 +210,20 @@ static bool lazy_load_file(struct page *page, void *aux)
 /* Do the munmap */
 void do_munmap(void *addr)
 {
-	/*
-	1. addr로 page 검색해서 찾기
-	2. spt_remove_page 호출해서 해당 페이지 삭제하기
-	*/
-
-	struct page *page = spt_find_page(&thread_current()->spt, addr);
-	if (!page)
+	struct page *mmap_page = spt_find_page(&thread_current()->spt, addr);
+	if (mmap_page == NULL || page_get_type(mmap_page) != VM_FILE)
 		return;
 
-	if (page->next_page != NULL)
-		do_munmap(page->next_page->va);
+	int length;
+	if (VM_TYPE(mmap_page->operations->type) == VM_FILE) {
+		length = mmap_page->file.length;
+	} else {
+		struct mmap_aux *mmap_aux = mmap_page->uninit.aux;
+		length = mmap_aux->length;
+	}
 
-	// printf("munmap addr: %p, page: %p, type: %d\n", addr, page, page->operations->type);
-	spt_remove_page(&thread_current()->spt, page);
-}
-
-static bool lazy_load_file(struct page *page, void *aux)
-{
-	struct file_page *vm_load_aux = (struct file_page *)aux;
-	struct file *file = vm_load_aux->file;
-	off_t ofs = vm_load_aux->offset;
-	size_t page_read_bytes = vm_load_aux->page_read_bytes;
-
-	lock_acquire(&file_lock);
-	int read_result = file_read_at(file, page->frame->kva, page_read_bytes, ofs);
-	lock_release(&file_lock);
-
-	page->file.page_read_bytes = read_result;
-	memset(page->frame->kva + page_read_bytes, 0, PGSIZE - page_read_bytes);
-	free(aux);
-
-	return true;
+	for (size_t i = 0; i < length; i++) {
+		struct page *page = spt_find_page(&thread_current()->spt, addr + (PGSIZE * i));
+		spt_remove_page(&thread_current()->spt, page);
+	}
 }
