@@ -739,7 +739,7 @@ static bool setup_stack(struct intr_frame *if_)
 
 	// 등록 하고 할당
 	// spt 에 스택 페이지 등록
-	if (!vm_alloc_page(VM_ANON | VM_STACK_MAKER, stack_bottom, true))
+	if (!vm_alloc_page(VM_ANON | VM_STACK_MARKER, stack_bottom, true))
 		return false;
 
 	// 물리 프레임 할당

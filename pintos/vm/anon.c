@@ -95,24 +95,35 @@ static void anon_destroy(struct page *page)
 {
 	struct anon_page *anon_page = &page->anon;
 
-	if (page->frame != NULL) {
-		lock_acquire(&frame_table_lock);
-		hash_delete(&frame_table->ft_hash, &page->frame->ft_hash_elem);
-		lock_release(&frame_table_lock);
-
-		// pte에서 매핑 제거
-		pml4_clear_page(thread_current()->pml4, page->va);
-
-		// 물리메모리도 제거
-		palloc_free_page(page->frame->kva);
-
-		// frame 구조체 해제
-		free(page->frame);
-		page->frame = NULL;
-	}
-
 	if (anon_page->swap_table_index != BITMAP_ERROR) {
 		size_t bitmap_index = anon_page->swap_table_index;
 		bitmap_set(swap_table, bitmap_index, false);
 	}
+
+	if (page->frame == NULL)
+		return;
+
+	lock_acquire(&frame_lock);
+	list_remove(&page->frame_list_elem);
+
+	if (list_size(&page->frame->page_list) > 0) {
+		// 아직 프레임을 참조하는 페이지가 존재하는 경우
+		page->frame = NULL;
+		lock_release(&frame_lock);
+		return;
+	}
+
+	// 프레임 해제하기
+	hash_delete(&frame_table->ft_hash, &page->frame->ft_hash_elem);
+	lock_release(&frame_lock);
+
+	// pte에서 매핑 제거
+	pml4_clear_page(thread_current()->pml4, page->va);
+
+	// 물리메모리도 제거
+	palloc_free_page(page->frame->kva);
+
+	// frame 구조체 해제
+	free(page->frame);
+	page->frame = NULL;
 }

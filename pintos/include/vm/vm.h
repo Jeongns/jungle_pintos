@@ -18,7 +18,7 @@ enum vm_type {
 
 	/* Auxillary bit flag marker for store information. You can add more
 	 * markers, until the value is fit in the int. */
-	VM_STACK_MAKER = (1 << 3),
+	VM_STACK_MARKER = (1 << 3),
 	VM_MARKER_1 = (1 << 4),
 
 	/* DO NOT EXCEED THIS VALUE. */
@@ -35,7 +35,7 @@ enum vm_type {
 struct page_operations;
 struct thread;
 extern struct frame_table *frame_table;
-extern struct lock frame_table_lock;
+extern struct lock frame_lock;
 
 #define VM_TYPE(type) ((type)&7)
 
@@ -49,9 +49,12 @@ struct page {
 	struct frame *frame; /* Back reference for frame */
 
 	/* Your implementation */
+	struct list_elem frame_list_elem;
 	struct hash_elem spt_hash_elem;
-	bool writable;
 	struct thread *owner_thread;
+	bool writable;
+	bool original_writable;
+	bool is_cow;
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -68,7 +71,7 @@ struct page {
 /* The representation of "frame" */
 struct frame {
 	void *kva;
-	struct page *page;
+	struct list page_list;
 
 	/* Your implementation */
 	struct hash_elem ft_hash_elem;

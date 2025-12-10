@@ -103,25 +103,33 @@ static bool file_backed_swap_out(struct page *page)
 static void file_backed_destroy(struct page *page)
 {
 	struct file_page *file_page = &page->file;
+	if (page->frame == NULL)
+		return;
 
-	if (page->frame != NULL) {
-		lock_acquire(&frame_table_lock);
-		hash_delete(&frame_table->ft_hash, &page->frame->ft_hash_elem);
-		lock_release(&frame_table_lock);
+	lock_acquire(&frame_lock);
+	list_remove(&page->frame_list_elem);
 
-		// pte에서 매핑 제거
-		pml4_clear_page(thread_current()->pml4, page->va);
-
-		// 물리메모리도 제거
-		palloc_free_page(page->frame->kva);
-
-		// frame 구조체 해제
-		free(page->frame);
+	if (list_size(&page->frame->page_list) > 0) {
+		// 아직 프레임을 참조하는 페이지가 있으면
 		page->frame = NULL;
 
-		// TLB 플러시 (변경사항 적용)
-		pml4_activate(thread_current()->pml4);
+		lock_release(&frame_lock);
+		return;
 	}
+
+	// 프레임 해제하기
+	hash_delete(&frame_table->ft_hash, &page->frame->ft_hash_elem);
+	lock_release(&frame_lock);
+
+	// pte에서 매핑 제거
+	pml4_clear_page(thread_current()->pml4, page->va);
+
+	// 물리메모리도 제거
+	palloc_free_page(page->frame->kva);
+
+	// frame 구조체 해제
+	free(page->frame);
+	page->frame = NULL;
 }
 
 /*
