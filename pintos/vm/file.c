@@ -36,15 +36,15 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 	page->operations = &file_ops;
 
 	// 2. file_page 구조체 초기화
-	struct file_page *aux = page->uninit.aux;
+	struct mmap_aux *aux = (struct mmap_aux *)page->uninit.aux;
 	struct file_page *file_page = &page->file;
 
 	*file_page = (struct file_page){
 		.offset = aux->offset,
 		.file = aux->file,
 		.page_read_bytes = aux->page_read_bytes,
-		.index = aux->index,
-		.length = aux->length,
+		.mmap_index = aux->mmap_index,
+		.mmap_length = aux->mmap_length,
 	};
 
 	return true;
@@ -57,19 +57,24 @@ static bool file_backed_swap_in(struct page *page, void *kva)
 		return false;
 
 	struct file_page *file_page = &page->file;
+	if (file_page->file == NULL)
+		return false;
 
 	struct file *file = file_page->file;
 	off_t ofs = file_page->offset;
 	size_t page_read_bytes = file_page->page_read_bytes;
 
 	lock_acquire(&file_lock);
-	int read_result = file_read_at(file, page->frame->kva, page_read_bytes, ofs);
+	int result = file_read_at(file, page->frame->kva, page_read_bytes, ofs);
 	lock_release(&file_lock);
 
-	if (read_result != (int)page_read_bytes)
-		PANIC("PANIC: VM_FILE swap in, 예상보다 적게 읽었는데 어떻게 하지?\n");
+	if (result != file_page->page_read_bytes) {
+		// 파일 쓰기에 실패했다면 OS가 할 수 있는 일은 없다.
+		// 데이터는 유실되더라도 메모리 누수는 막아야 한다.
+		printf("File read failed! intended: %d, actual: %d", page_read_bytes, result);
+	}
 
-	memset(page->frame->kva + page_read_bytes, 0, PGSIZE - page_read_bytes);
+	memset(kva + page_read_bytes, 0, PGSIZE - page_read_bytes);
 	return true;
 }
 
@@ -80,22 +85,24 @@ static bool file_backed_swap_out(struct page *page)
 		return false;
 
 	struct file_page *file_page = &page->file;
-
-	if (pml4_is_dirty(thread_current()->pml4, page->va)) {
-		/* write back 수행 */
-
+	bool is_dirty = pml4_is_dirty(thread_current()->pml4, page->va);
+	if (is_dirty) {
 		struct file *file = file_page->file;
 		off_t ofs = file_page->offset;
 		size_t page_read_bytes = file_page->page_read_bytes;
 
 		lock_acquire(&file_lock);
-		int write_result = file_write_at(file, page->frame->kva, page_read_bytes, ofs);
+		off_t result = file_write_at(file, page->frame->kva, page_read_bytes, ofs);
 		lock_release(&file_lock);
 
-		if (write_result != (int)page_read_bytes)
-			PANIC("PANIC: VM_FILE swap in, 예상보다 적게 썼는데 어떻게 하지?\n");
+		if (result != file_page->page_read_bytes) {
+			// 파일 쓰기에 실패했다면 OS가 할 수 있는 일은 없다.
+			// 데이터는 유실되더라도 메모리 누수는 막아야 한다.
+			printf("File write failed! intended: %d, actual: %d", page_read_bytes, result);
+		}
 	}
 
+	pml4_set_dirty(thread_current()->pml4, page->va, false);
 	return true;
 }
 
@@ -105,6 +112,8 @@ static void file_backed_destroy(struct page *page)
 	struct file_page *file_page = &page->file;
 	if (page->frame == NULL)
 		return;
+
+	file_backed_swap_out(page);
 
 	lock_acquire(&frame_lock);
 	list_remove(&page->frame_list_elem);
@@ -170,8 +179,8 @@ void *do_mmap(void *addr, size_t length, int writable, struct file *file, off_t 
 			.file = file,
 			.offset = offset,
 			.page_read_bytes = page_read_bytes,
-			.index = index++,						  // mmap 중에 몇번재
-			.length = (length + PGSIZE - 1) / PGSIZE, // mmap 총 몇페이지
+			.mmap_index = index++,						   // mmap 중에 몇번재
+			.mmap_length = (length + PGSIZE - 1) / PGSIZE, // mmap 총 몇페이지
 		};
 
 		if (!vm_alloc_page_with_initializer(VM_FILE, addr_copy, writable, lazy_load_file,
@@ -209,7 +218,7 @@ static bool lazy_load_file(struct page *page, void *aux)
 	lock_release(&file_lock);
 
 	page->file.page_read_bytes = read_result;
-	memset(page->frame->kva + page_read_bytes, 0, PGSIZE - page_read_bytes);
+	memset(page->frame->kva + read_result, 0, PGSIZE - read_result);
 	free(aux);
 
 	return true;
@@ -226,16 +235,17 @@ void do_munmap(void *addr)
 
 	int length;
 	if (VM_TYPE(mmap_page->operations->type) == VM_FILE) {
-		length = mmap_page->file.length;
+		length = mmap_page->file.mmap_length;
 	} else {
 		struct mmap_aux *mmap_aux = mmap_page->uninit.aux;
-		length = mmap_aux->length;
+		length = mmap_aux->mmap_length;
 	}
 
 	for (size_t i = 0; i < length; i++) {
 		struct page *page = spt_find_page(&thread_current()->spt, addr + (PGSIZE * i));
+		ASSERT(page != NULL);
 		spt_remove_page(&thread_current()->spt, page);
 	}
 
-	file_close(mmap_file);
+	file_close(mmap_file); // TODO: exit 시 file_close
 }

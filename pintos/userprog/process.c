@@ -681,7 +681,7 @@ static bool install_page(void *upage, void *kpage, bool writable)
 
 static bool lazy_load_segment(struct page *page, void *aux)
 {
-	struct file_page *vm_load_aux = (struct file_page *)aux;
+	struct vm_load_aux *vm_load_aux = (struct vm_load_aux *)aux;
 	struct file *file = thread_current()->current_file;
 	off_t ofs = vm_load_aux->offset;
 	size_t page_read_bytes = vm_load_aux->page_read_bytes;
@@ -710,16 +710,15 @@ static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t 
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		struct file_page *vm_load_aux = malloc(sizeof(*vm_load_aux));
-		*vm_load_aux = (struct file_page){
-			.file = file,
+		struct vm_load_aux *vm_load_aux = malloc(sizeof(*vm_load_aux));
+		*vm_load_aux = (struct vm_load_aux){
 			.offset = ofs,
 			.page_read_bytes = page_read_bytes,
 		};
 
 		// 파일은 mmap, stack은 anon, 실행파일도 anon!!! write back 기준으로!
-		if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment,
-											vm_load_aux))
+		if (!vm_alloc_page_with_initializer(VM_ANON | VM_LOAD_MARKER, upage, writable,
+											lazy_load_segment, vm_load_aux))
 			return false;
 
 		/* Advance. */

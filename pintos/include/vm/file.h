@@ -10,16 +10,16 @@ struct file_page {
 	struct file *file;		  // 매핑된 파일 객체
 	uint64_t offset;		  // 파일 객체의 오프셋 값
 	uint32_t page_read_bytes; // 페이지에서 읽어야 하는 바이트의 개수
-	uint32_t index;
-	uint32_t length;
+	uint32_t mmap_index;
+	uint32_t mmap_length;
 };
 
 struct mmap_aux {
 	struct file *file;
 	uint64_t offset;
 	uint32_t page_read_bytes;
-	uint32_t index;
-	uint32_t length;
+	uint32_t mmap_index;
+	uint32_t mmap_length;
 };
 
 void vm_file_init(void);

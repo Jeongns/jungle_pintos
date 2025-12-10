@@ -365,18 +365,8 @@ static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t
 
 static void syscall_munmap(void *addr)
 {
-	/*
-	1. addr 유효성 검사
-	2. page spt에 등록되어 있는지 확인 -> 등록 안 되어 있으면 그냥 return
-	3. 등록되어 있으면 do_munmap()
-	*/
-
 	if (addr == NULL || is_kernel_vaddr(addr) || pg_ofs(addr) != 0)
 		return;
-
-	if (spt_find_page(&thread_current()->spt, addr) == NULL) {
-		return;
-	}
 
 	return do_munmap(addr);
 }
