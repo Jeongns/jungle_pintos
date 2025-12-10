@@ -35,12 +35,8 @@ enum vm_type {
 struct page_operations;
 struct thread;
 
-#define VM_TYPE(type) ((type) & 7)
+#define VM_TYPE(type) ((type)&7)
 
-/* The representation of "page".
- * This is kind of "parent class", which has four "child class"es, which are
- * uninit_page, file_page, anon_page, and page cache (project4).
- * DO NOT REMOVE/MODIFY PREDEFINED MEMBER OF THIS STRUCTURE. */
 struct page {
 	const struct page_operations *operations;
 	void *va;			 /* Address in terms of user space */
@@ -49,9 +45,8 @@ struct page {
 	/* Your implementation */
 	struct hash_elem spt_hash_elem;
 	bool writable;
+	struct thread *owner;
 
-	/* Per-type data are binded into the union.
-	 * Each function automatically detects the current union */
 	union {
 		struct uninit_page uninit;
 		struct anon_page anon;
@@ -62,16 +57,12 @@ struct page {
 	};
 };
 
-/* The representation of "frame" */
 struct frame {
-	void *kva;
-	struct page *page;
+	void *kva;			   // 물리 주소
+	struct page *page;	   // 이 프레임을 사용하는 페이지
+	struct list_elem elem; // frame table 리스트 연결용
 };
 
-/* The function table for page operations.
- * This is one way of implementing "interface" in C.
- * Put the table of "method" into the struct's member, and
- * call it whenever you needed. */
 struct page_operations {
 	bool (*swap_in)(struct page *, void *);
 	bool (*swap_out)(struct page *);

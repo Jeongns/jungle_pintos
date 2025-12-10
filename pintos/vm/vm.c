@@ -7,12 +7,25 @@
 #include "vm/inspect.h"
 #include <string.h>
 
-/* Initializes the virtual memory subsystem by invoking each subsystem's
- * intialize codes. */
+// frame table 사용 위해 추가
+#include "threads/synch.h"
+#include "lib/kernel/list.h"
+
+// 전역 변수
+struct list frame_table;	  // 모든 프레임 목록
+struct list_elem *clock_hand; // clock 알고리즘 포인터
+struct lock frame_table_lock; // 동기화용 락
+
 void vm_init(void)
 {
 	vm_anon_init();
 	vm_file_init();
+
+	// frame table 초기화
+	list_init(&frame_table);
+	clock_hand = NULL;
+	lock_init(&frame_table_lock);
+
 #ifdef EFILESYS /* For project 4 */
 	pagecache_init();
 #endif
@@ -38,7 +51,7 @@ enum vm_type page_get_type(struct page *page)
 /* Helpers */
 static struct frame *vm_get_victim(void);
 static bool vm_do_claim_page(struct page *page);
-static struct frame *vm_evict_frame(void);
+static struct frame *vm_evict_frame(struct frame *victim);
 
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
@@ -124,23 +137,84 @@ void spt_remove_page(struct supplemental_page_table *spt, struct page *page)
 	vm_dealloc_page(page);
 }
 
-/* Get the struct frame, that will be evicted. */
-static struct frame *vm_get_victim(void)
+// victim frame과 연결된 page를 swap-out해주고
+// pte에서 삭제하고
+// 페이지-프레임 연결 해제
+static struct frame *vm_evict_frame(struct frame *victim)
 {
-	struct frame *victim = NULL;
-	/* TODO: The policy for eviction is up to you. */
+	struct page *page = victim->page;
 
-	return victim;
+	// 페이지 타입에 맞는 swap_out 호출
+	bool result = swap_out(page);
+	if (!result)
+		return false;
+
+	// 페이지 - 프레임 연결 해제
+	// TODO: swap_out 에서 이미 수행 되었을수도 있음
+
+	return true;
 }
 
-/* Evict one page and return the corresponding frame.
- * Return NULL on error.*/
-static struct frame *vm_evict_frame(void)
+static struct frame *vm_get_victim(void)
 {
-	struct frame *victim UNUSED = vm_get_victim();
-	/* TODO: swap out the victim and return the evicted frame. */
+	ASSERT(lock_held_by_current_thread(&frame_table_lock));
 
-	return NULL;
+	if (list_empty(&frame_table)) {
+		return NULL;
+	}
+
+	// clock hand 초기화
+	if (clock_hand == NULL || clock_hand == list_end(&frame_table))
+		clock_hand = list_begin(&frame_table);
+
+	struct list_elem *start = clock_hand;
+	size_t num_frames = list_size(&frame_table);
+
+	// clock 알고리즘 - 첫번째 라운드
+	for (size_t i = 0; i < num_frames; i++) {
+		struct frame *frame = list_entry(clock_hand, struct frame, elem);
+
+		// 리스트 이동
+		clock_hand = list_next(clock_hand);
+		if (clock_hand == list_end(&frame_table))
+			clock_hand = list_begin(&frame_table);
+
+		// 페이지가 없는 프레임은 스킵한다. 타이밍 이슈로 짧은 순간 null 인 경우로 본다.
+		// 방금 evict되었거나, 새로 생성된 프레임일 때.
+		if (NULL == frame->page)
+			continue;
+
+		struct page *page = frame->page;
+
+		// accessed bit 확인
+		if (pml4_is_accessed(page->owner->pml4, page->va)) {
+			// 기회를 준다. 비트 초기화
+			pml4_set_accessed(page->owner->pml4, page->va, false);
+		} else {
+			// victim 발견
+			return frame;
+		}
+	}
+
+	// 두번째 라운드: 모든 accessed bit 가 0으로 초기화 된 상태
+	for (size_t i = 0; i < num_frames; i++) {
+		struct frame *frame = list_entry(clock_hand, struct frame, elem);
+
+		clock_hand = list_next(clock_hand);
+		if (clock_hand == list_end(&frame_table))
+			clock_hand = list_begin(&frame_table);
+
+		if (NULL == frame->page)
+			continue;
+
+		struct page *page = frame->page;
+		if (!pml4_is_accessed(page->owner->pml4, page->va)) {
+			return frame;
+		}
+	}
+
+	// 없으면 첫번재 프레임 반환
+	return list_entry(list_begin(&frame_table), struct frame, elem);
 }
 
 /* palloc()으로 프레임을 획득한다. 사용가능한 페이지가 없으면 페이지를 제거한다.
@@ -148,20 +222,50 @@ static struct frame *vm_evict_frame(void)
  * 메모리 공간을 확보하기 위해 프레임을 제거한다. */
 static struct frame *vm_get_frame(void)
 {
-	// frame 구조체를 생성한다
-	struct frame *frame = malloc(sizeof(*frame));
-	if (frame == NULL)
-		PANIC("(vm_get_frame)");
+	// TODO: lock 필요한 이유?
+	lock_acquire(&frame_table_lock);
 
-	*frame = (struct frame){
-		.page = NULL,
-		.kva = palloc_get_page(PAL_USER | PAL_ZERO) // 사용자풀에서 물리 페이지 할당받는다
-	};
+	// 1. 물리메모리 할당 시도
+	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
 
-	if (frame->kva == NULL)
-		PANIC("(vm_get_frame) TODO: swap out 미구현");
+	//////////////////////////////////////////////
+	// 2. 실패하면 eviction
+	if (NULL == kva) {
+		struct frame *victim = vm_get_victim();
+		if (NULL == victim) {
+			lock_release(&frame_table_lock);
+			PANIC("vm_get_frame: no evictable frame.");
+		}
+		// 여기서는 아직 frame에 page A가 연결되어 있는 상태
+		// page A의 데이터가 아직 물리메모리에 있는 상태임
 
-	ASSERT(frame->page == NULL);
+		if (!vm_evict_frame(victim)) {
+			lock_release(&frame_table_lock);
+			PANIC("vm_get_frame: Eviction failed.");
+		}
+
+		// victim 프레임 사용
+		kva = victim->kva; // 재사용
+		victim->page = NULL;
+
+		lock_release(&frame_table_lock);
+		return victim;
+	}
+
+	//////////////////////////////////////////////
+	// 3. 물리메모리 있으면 프레임 생성, 등록
+	struct frame *frame = malloc(sizeof(struct frame));
+	if (NULL == frame) {
+		palloc_free_page(kva);
+		lock_release(&frame_table_lock);
+		PANIC("vm_get_frame: malloc failed.");
+	}
+
+	frame->kva = kva;
+	frame->page = NULL;
+	list_push_back(&frame_table, &frame->elem); // 리스트에 추가
+
+	lock_release(&frame_table_lock);
 	return frame;
 }
 
@@ -257,6 +361,7 @@ static bool vm_do_claim_page(struct page *page)
 	// 2. 페이지와 프레임을 서로 연결한다
 	frame->page = page;
 	page->frame = frame;
+	page->owner = thread_current();
 
 	// 3. pte 생성
 	bool success = pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable);
