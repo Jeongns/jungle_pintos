@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DEFAULT_SIZE 64
+#define WORD_SIZE 64
 
 struct file *stdin_entry;
 struct file *stdout_entry;
@@ -11,6 +11,7 @@ struct file *stdout_entry;
 struct fd_table {
 	int size;
 	int next_fd;
+	unsigned long *bitmap;
 	struct file **file_list;
 };
 
@@ -35,16 +36,18 @@ bool fd_init(struct thread *t)
 		return false;
 	}
 
-	t->fd_table->size = DEFAULT_SIZE;
+	t->fd_table->size = WORD_SIZE;
 	t->fd_table->file_list = calloc(t->fd_table->size, sizeof(struct file *));
+	t->fd_table->bitmap = calloc(1, sizeof(unsigned long));
 
-	if (t->fd_table->file_list == NULL) {
+	if (t->fd_table->file_list == NULL || t->fd_table->bitmap == NULL) {
+		free(t->fd_table->bitmap);
 		free(t->fd_table->file_list);
-		free(t->fd_table);
 		return false;
 	}
 
 	t->fd_table->next_fd = 2;
+	t->fd_table->bitmap[0] |= 3;
 	t->fd_table->file_list[0] = stdin_entry;
 	t->fd_table->file_list[1] = stdout_entry;
 	return true;
@@ -57,6 +60,7 @@ int fd_allocate(struct fd_table *fd_t, struct file *f)
 	int cur_fd = fd_t->next_fd;
 	fd_t->file_list[cur_fd] = f;
 
+	fd_t->bitmap[cur_fd / WORD_SIZE] |= (1ULL << (cur_fd % WORD_SIZE));
 	fd_t->next_fd = fd_find_next(fd_t);
 	return cur_fd;
 }
@@ -78,19 +82,23 @@ void fd_close(struct fd_table *fd_t, int fd)
 	if (file != stdin_entry && file != stdout_entry)
 		file_close(file);
 
+	fd_t->bitmap[fd / WORD_SIZE] &= ~(1ULL << (fd % WORD_SIZE));
 	if (fd < fd_t->next_fd)
 		fd_t->next_fd = fd;
 }
 
 bool copy_fd_table(struct fd_table *dst, struct fd_table *src)
 {
+	unsigned long *new_bitmap = calloc(src->size / WORD_SIZE, sizeof(unsigned long));
 	struct file **new_file_list = calloc(src->size, sizeof(struct file *));
 
-	if (new_file_list == NULL) {
+	if (new_bitmap == NULL || new_file_list == NULL) {
+		free(new_bitmap);
 		free(new_file_list);
 		return false;
 	}
 
+	memcpy(new_bitmap, src->bitmap, src->size / sizeof(unsigned long));
 	for (int i = 0; i < src->size; i++) {
 		if (src->file_list[i] == NULL)
 			continue;
@@ -116,9 +124,11 @@ bool copy_fd_table(struct fd_table *dst, struct fd_table *src)
 			return false;
 	}
 
+	free(dst->bitmap);
 	free(dst->file_list);
 	dst->next_fd = src->next_fd;
 	dst->size = src->size;
+	dst->bitmap = new_bitmap;
 	dst->file_list = new_file_list;
 	return true;
 }
@@ -130,6 +140,7 @@ void fd_clean(struct thread *t)
 	for (int i = 2; i < t->fd_table->size; i++) {
 		fd_close(t->fd_table, i);
 	}
+	free(t->fd_table->bitmap);
 	free(t->fd_table->file_list);
 	free(t->fd_table);
 	t->fd_table = NULL;
@@ -157,6 +168,7 @@ int fd_dup2(struct fd_table *fd_t, int oldfd, int newfd)
 
 	file_dup2(file);
 	fd_t->file_list[newfd] = file;
+	fd_t->bitmap[newfd / WORD_SIZE] |= 1ULL << (newfd % WORD_SIZE);
 	if (newfd == fd_t->next_fd)
 		fd_t->next_fd = fd_find_next(fd_t);
 	return newfd;
@@ -164,13 +176,14 @@ int fd_dup2(struct fd_table *fd_t, int oldfd, int newfd)
 
 static int fd_find_next(struct fd_table *fd_t)
 {
-	int start = fd_t->next_fd;
+	int w = fd_t->next_fd / WORD_SIZE;
 	while (1) {
-		for (int i = start; i < fd_t->size; i++) {
-			if (fd_t->file_list[i] == NULL)
-				return i;
+		for (; w < fd_t->size / WORD_SIZE; w++) {
+			if (fd_t->bitmap[w] != ~0ULL) {
+				int bit = __builtin_ffsl(~fd_t->bitmap[w]) - 1;
+				return w * WORD_SIZE + bit;
+			}
 		}
-
 		if (!fd_table_expand(fd_t))
 			return -1;
 	}
@@ -179,15 +192,22 @@ static int fd_find_next(struct fd_table *fd_t)
 static bool fd_table_expand(struct fd_table *fd_t)
 {
 	int new_size = fd_t->size * 2;
+	unsigned long *new_bitmap = calloc(new_size / WORD_SIZE, sizeof(unsigned long));
 	struct file **new_file_list = calloc(new_size, sizeof(struct file *));
 
-	if (new_file_list == NULL)
+	if (new_bitmap == NULL || new_file_list == NULL) {
+		free(new_bitmap);
+		free(new_file_list);
 		return false;
+	}
 
+	memcpy(new_bitmap, fd_t->bitmap, fd_t->size / sizeof(unsigned long));
 	memcpy(new_file_list, fd_t->file_list, fd_t->size * sizeof(struct file *));
 
+	free(fd_t->bitmap);
 	free(fd_t->file_list);
 	fd_t->size = new_size;
+	fd_t->bitmap = new_bitmap;
 	fd_t->file_list = new_file_list;
 
 	return true;
